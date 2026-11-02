@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>لمّة</title>
+<meta name="description" content="تطبيق دردشة العائلة">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="لمّة">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Reem+Kufi:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- شاشة البداية -->
+<section id="boot" class="screen center">
+  <img class="logo-mark" src="icons/icon-192.png" alt="">
+  <h1 class="brand">لمّة</h1>
+  <p class="muted" id="bootMsg">جاري التحميل…</p>
+</section>
+
+<!-- تسجيل الدخول -->
+<section id="auth" class="screen hidden">
+  <div class="auth-top"><img class="logo-mark sm" src="icons/icon-192.png" alt=""><h1 class="brand">لمّة</h1><p>مكان العائلة الخاص</p></div>
+  <div class="sadu"></div>
+  <form id="authForm" class="card form">
+    <div class="seg" id="authSeg"><button type="button" data-m="in" class="on">دخول</button><button type="button" data-m="up">حساب جديد</button></div>
+    <label>رقم الجوال أو الإيميل<input id="phone" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="05xxxxxxxx أو name@gmail.com" required></label>
+    <label>كلمة المرور<input id="pass" type="password" autocomplete="current-password" minlength="6" placeholder="6 خانات أو أكثر" required></label>
+    <p class="err" id="authErr"></p>
+    <button class="btn" id="authBtn">دخول</button>
+    <button type="button" class="link" id="forgotBtn">نسيت كلمة المرور؟</button>
+    <p class="hint">تقدر تسجّل برقم جوالك أو بإيميلك. الرقم يُستخدم كاسم مستخدم فقط، ما نرسل له رسائل.</p>
+  </form>
+</section>
+
+<!-- العائلة: إنشاء / انضمام / فتح القفل -->
+<section id="family" class="screen hidden">
+  <div class="auth-top"><img class="logo-mark sm" src="icons/icon-192.png" alt=""><h1 class="brand" id="famTitle">انضم لعائلتك</h1><p id="famSub"></p></div>
+  <div class="sadu"></div>
+  <form id="famForm" class="card form">
+    <label id="famNameL">اسمك اللي يشوفه أهلك<input id="famName" maxlength="40" placeholder="مثال: أبو فهد"></label>
+    <label>كلمة سر العائلة<input id="famPass" type="password" autocomplete="off" placeholder="8 خانات أو أكثر"></label>
+    <label id="famPass2L">أكّد كلمة السر<input id="famPass2" type="password" autocomplete="off"></label>
+    <p class="err" id="famErr"></p>
+    <button class="btn" id="famBtn">دخول</button>
+    <p class="hint" id="famHint">كلمة سر العائلة تشفّر كل الرسائل على الجوال نفسه. حتى صاحب السيرفر ما يقدر يقراها. لا تنساها!</p>
+    <button type="button" class="link" id="famOut">تسجيل خروج</button>
+  </form>
+</section>
+
+<!-- الواجهة الرئيسية -->
+<section id="main" class="screen hidden">
+  <header class="lg-head">
+    <div class="lg-actions">
+      <button class="glass-btn" id="menuBtn" aria-label="المزيد"><svg viewBox="0 0 24 24" aria-hidden="true" class="fill"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+      <span class="grow"></span>
+      <button class="glass-btn" id="camBtn" aria-label="قصة جديدة"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.7l1.3-2h5l1.3 2h1.7A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.3" r="3.4"/></svg></button>
+      <button class="glass-btn primary" id="fab" aria-label="محادثة جديدة"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+    <h1 class="large-title" id="pageTitle">الدردشات</h1>
+    <label class="search" id="searchBar"><svg viewBox="0 0 24 24" aria-hidden="true" ><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg><input id="searchInp" type="search" placeholder="ابحث في الدردشات"></label>
+  </header>
+  <div id="installTip" class="tip hidden"></div>
+  <div class="pane" id="pane-chats"><ul class="list" id="chatList"></ul></div>
+  <div class="pane hidden" id="pane-stories"></div>
+  <div class="pane hidden" id="pane-calls"></div>
+  <div class="pane hidden" id="pane-games"></div>
+  <div class="pane hidden" id="pane-settings"></div>
+  <nav class="tabbar" id="tabs">
+    <button data-t="stories"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true" ><circle cx="12" cy="12" r="8.5" stroke-dasharray="4 2.6"/><circle cx="12" cy="12" r="4.5"/></svg><i class="dot hidden" id="storyDot"></i></span><span>القصص</span></button>
+    <button data-t="calls"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M6.6 3.8 9 3.5l1.6 4-2 1.5a11 11 0 0 0 6.4 6.4l1.5-2 4 1.6-.3 2.4a2 2 0 0 1-2 1.7A15.6 15.6 0 0 1 4.9 5.8a2 2 0 0 1 1.7-2z"/></svg></span><span>المكالمات</span></button>
+    <button data-t="chats" class="on"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M4 11.5C4 7.4 7.6 4.5 12 4.5s8 2.9 8 7-3.6 7-8 7c-1 0-2-.2-2.9-.5L5 19.5l1.2-3.4A6.6 6.6 0 0 1 4 11.5z"/></svg><b class="badge hidden" id="unreadBadge"></b></span><span>الدردشات</span></button>
+    <button data-t="games"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7.5h10a4.5 4.5 0 0 1 4.4 5.5l-.9 3.8a2.3 2.3 0 0 1-4 .9L14.6 15H9.4l-1.9 2.7a2.3 2.3 0 0 1-4-.9L2.6 13A4.5 4.5 0 0 1 7 7.5zM7.5 10.5v3M6 12h3M15.5 11.2v.1M17.5 13v.1"/></svg><b class="badge hidden" id="gamesBadge"></b></span><span>الألعاب</span></button>
+    <button data-t="settings"><span class="ti" id="meTab"><svg viewBox="0 0 24 24" aria-hidden="true" ><circle cx="12" cy="9" r="3.6"/><path d="M5 19.5c1.3-3 3.9-4.5 7-4.5s5.7 1.5 7 4.5"/></svg></span><span>أنت</span></button>
+  </nav>
+</section>
+
+<!-- شاشة المحادثة -->
+<section id="chat" class="screen chat-screen off">
+  <header class="chatbar">
+    <button class="glass-btn" id="chatBack" aria-label="رجوع"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="m9 5 7 7-7 7"/></svg></button>
+    <div class="chat-who" id="chatWho"></div>
+    <div class="glass-group hidden" id="callGroup">
+      <button id="vidBtn" aria-label="مكالمة فيديو"><svg viewBox="0 0 24 24" aria-hidden="true" ><rect x="3" y="6.5" width="12.5" height="11" rx="2.5"/><path d="m15.5 10.5 5-3v9l-5-3z"/></svg></button>
+      <button id="callBtn" aria-label="مكالمة صوتية"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M6.6 3.8 9 3.5l1.6 4-2 1.5a11 11 0 0 0 6.4 6.4l1.5-2 4 1.6-.3 2.4a2 2 0 0 1-2 1.7A15.6 15.6 0 0 1 4.9 5.8a2 2 0 0 1 1.7-2z"/></svg></button>
+    </div>
+  </header>
+  <div class="msgs" id="msgs"></div>
+  <div class="replybox hidden" id="replyBox"><div><b id="replyName"></b><span id="replyText"></span></div><button class="icon-btn" id="replyX" aria-label="إلغاء الرد"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg></button></div>
+  <div class="composer" id="composer">
+    <button class="glass-btn" id="attachBtn" aria-label="إرسال صورة"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M12 5v14M5 12h14"/></svg></button>
+    <input type="file" id="fileInp" accept="image/*" hidden>
+    <div class="pill"><textarea id="msgInp" rows="1" placeholder="اكتب رسالة"></textarea></div>
+    <button class="send" id="sendBtn" aria-label="تسجيل صوت"></button>
+  </div>
+  <div class="recbar hidden" id="recBar">
+    <button class="glass-btn" id="recX" aria-label="إلغاء"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></svg></button>
+    <div class="pill rec"><span class="rec-dot"></span><span id="recTime">0:00</span><span class="muted">جاري التسجيل…</span></div>
+    <button class="send" id="recSend" aria-label="إرسال"><svg viewBox="0 0 24 24" aria-hidden="true" ><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+  </div>
+</section>
+
+<!-- معلومات القروب / الشخص -->
+<section id="info" class="screen info-screen off"></section>
+<section id="game" class="screen info-screen game-screen off"></section>
+<button id="callPill" class="call-pill hidden"></button>
+
+<div id="sheetWrap" class="sheet-wrap hidden"><div class="sheet" id="sheet"></div></div>
+<div id="viewer" class="overlay hidden"></div>
+<div id="call" class="overlay call hidden"></div>
+<div id="toast" class="toast"></div>
+<div id="banner" class="banner" role="status" aria-live="polite"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
