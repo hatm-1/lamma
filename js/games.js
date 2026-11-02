@@ -97,7 +97,14 @@ export async function onGameChange(table, p) {
     if (p.eventType === 'DELETE') { if (j >= 0) arr.splice(j, 1); }
     else if (j >= 0) arr[j] = r; else arr.push(r);
   }
-  if (G.open && (G.open.id === r.id || G.open.id === r.game_id)) {
+  // الخصم وافق على الجولة الثانية وأنا فاتح الجولة القديمة: انقلني لها
+  if (table === 'game_moves' && r.key === 'acc' && G.open && p.eventType !== 'DELETE') {
+    const ng = G.list.find((x) => x.id === r.game_id);
+    if (ng && ng.state?.prev === G.open.id && ng.created_by === me()) { sfx('ding'); C.toast(C.short(r.user_id) + ' وافق، يلا!'); openGame(ng.id); return; }
+    if (ng && ng.id === G.open.id && ng.created_by === me()) { sfx('ding'); C.toast(C.short(r.user_id) + ' قبل التحدي'); }
+  }
+  const relGame = table === 'game_moves' ? G.list.find((x) => x.id === r.game_id) : r;
+  if (G.open && (G.open.id === r.id || G.open.id === r.game_id || relGame?.state?.prev === G.open.id)) {
     G.open = G.list.find((g) => g.id === G.open.id) || G.open;
     renderGame();
   }
@@ -107,7 +114,8 @@ export async function onGameChange(table, p) {
 
 // دورك؟ (عدد الألعاب اللي تنتظرك)
 export function myTurns() {
-  return G.list.filter((g) => TURN.has(g.kind) && g.status === 'open' && turnOf(g) === me() && !winnerOf(g)).length;
+  return G.list.filter((g) => TURN.has(g.kind) && g.status === 'open' && !declined(g) && !winnerOf(g)
+    && (pendingInvite(g) ? g.state.to === me() : turnOf(g) === me())).length;
 }
 
 // ---------- تبويب الألعاب ----------
@@ -150,7 +158,11 @@ function gameRow(g) {
   let flag = '';
   if (TURN.has(g.kind)) {
     const w = winnerOf(g);
-    if (w) sub += ' · ' + (w === 'draw' ? 'تعادل' : w === me() ? 'فزت' : 'فاز ' + C.short(w));
+    if (declined(g)) sub += ' · ' + (g.state.to === me() ? 'اعتذرت' : 'اعتذر ' + C.short(g.state.to));
+    else if (pendingInvite(g)) {
+      if (g.state.to === me()) flag = '<span class="turn-badge">يتحداك</span>';
+      else sub += ' · ننتظر موافقة ' + C.short(g.state.to);
+    } else if (w) sub += ' · ' + (w === 'draw' ? 'تعادل' : w === me() ? 'فزت' : 'فاز ' + C.short(w));
     else if (turnOf(g) === me()) flag = '<span class="turn-badge">دورك</span>';
     else sub += ' · دور ' + C.short(turnOf(g));
   } else {
@@ -177,7 +189,7 @@ export async function newGameSheet(kind, preChat) {
       C.closeSheet();
       const chatId = await C.openDirect(u);
       if (!chatId) return;
-      createGame(kind, chatId, { x: me(), o: u });
+      createGame(kind, chatId, { x: me(), o: u, to: u }, `تحدي ${info.n}`);
     });
     return;
   }
@@ -224,15 +236,17 @@ export async function newGameSheet(kind, preChat) {
     createGame(kind, chatId, state);
   };
 }
-async function createGame(kind, chatId, state) {
+async function createGame(kind, chatId, state, cardText, stay) {
   const id = crypto.randomUUID();
   const { error } = await C.sb.from('games').insert({ id, chat_id: chatId, kind, state, created_by: me() });
   if (error) { console.error(error); return C.toast('ما قدرنا نبدأ اللعبة'); }
   const g = { id, chat_id: chatId, kind, state, created_by: me(), status: 'open', created_at: new Date().toISOString() };
   if (!G.list.some((x) => x.id === id)) G.list.unshift(g);
   if (!G.moves.has(id)) G.moves.set(id, []);
-  C.sendTo(chatId, 'game', { g: id, k: kind, t: gameTitle(g) });
+  C.sendTo(chatId, 'game', { g: id, k: kind, t: cardText || gameTitle(g) });
+  if (stay) { renderGame(); return g; }
   openGame(id);
+  return g;
 }
 
 // ---------- شاشة اللعبة ----------
@@ -342,9 +356,19 @@ async function onGameClick(e) {
     const col = e.target.closest('[data-col]')?.dataset.col;
     if (col !== undefined) return playTurn(g, { c: Number(col) });
   }
-  if (TURN.has(g.kind) && a === 'rematch') {
-    const other = g.state.x === me() ? g.state.o : g.state.x;
-    return createGame(g.kind, g.chat_id, { x: other, o: me() });
+  if (TURN.has(g.kind)) {
+    if (a === 'accept') return acceptInvite(g);
+    if (a === 'decline') return declineInvite(g);
+    if (a === 'remind') { C.notify(g.chat_id, 'invite', g.state.to); return C.toast('ذكّرناه'); }
+    if (a === 'cancel') { if (await C.ask('تلغي التحدي؟', 'إلغاء التحدي', true)) { await move(g, 'dec', {}, true); C.sb.from('games').update({ status: 'done' }).eq('id', g.id).then(() => {}); } return; }
+    if (a === 'resign') { if (await C.ask('تنسحب؟ بتنحسب خسارة', 'انسحاب', true)) { await move(g, 'res', {}, true); finishGame(g); } return; }
+    if (a === 'rematch') return askRematch(g);
+    if (a === 'newfoe') return newGameSheet(g.kind);
+    const rg = e.target.closest('[data-rg]')?.dataset.rg;
+    const r = rg && G.list.find((x) => x.id === rg);
+    if (r && a === 'r-accept') return acceptInvite(r, true);
+    if (r && a === 'r-decline') return declineInvite(r);
+    if (r && a === 'r-open') return openGame(r.id);
   }
   if (g.kind === 'word') {
     const k = e.target.closest('[data-k]')?.dataset.k;
@@ -615,27 +639,79 @@ export function c4Win(b) {
   }
   return b[0].every(Boolean) ? { s: 'draw' } : null;
 }
+// التحدي: اللي انطلب منه لازم يوافق قبل ما تبدأ
+const pendingInvite = (g) => !!g.state?.to && !movesOf(g.id).some((m) => m.key === 'acc' && m.user_id === g.state.to) && !turnMoves(g.id).length;
+const declined = (g) => !!g.state?.to && movesOf(g.id).some((m) => m.key === 'dec' && (m.user_id === g.state.to || m.user_id === g.created_by)) && pendingInvite(g);
+const resignedBy = (g) => movesOf(g.id).find((m) => m.key === 'res' && (m.user_id === g.state.x || m.user_id === g.state.o))?.user_id;
+const rematchOf = (g) => G.list.find((x) => x.state?.prev === g.id && !declined(x));
 function winnerOf(g) {
+  const rs = resignedBy(g);
+  if (rs) return rs === g.state.x ? g.state.o : g.state.x;
   const mv = turnMoves(g.id);
   const w = g.kind === 'xo' ? xoWin(xoBoard(mv)) : c4Win(c4Board(mv));
   if (!w) return null;
   return w.s === 'draw' ? 'draw' : w.s === 'x' ? g.state.x : g.state.o;
 }
 function turnOf(g) { return turnMoves(g.id).length % 2 ? g.state.o : g.state.x; }
+function seriesOf(g) {
+  const sc = { ...(g.state.sc || {}) };
+  const w = winnerOf(g);
+  if (w) sc[w] = (sc[w] || 0) + 1;
+  return sc;
+}
 function turnHeader(g) {
   const w = winnerOf(g);
   const t = turnOf(g);
-  const p = (u, s) => `<div class="pl${!w && t === u ? ' on' : ''}${w === u ? ' win' : ''}">${C.avatar(u, 'sm')}<b>${esc(u === me() ? 'أنت' : C.short(u))}</b><span class="pc ${s}"></span></div>`;
-  const status = w ? (w === 'draw' ? 'تعادل' : w === me() ? 'فزت! كفو' : `فاز ${C.short(w)}`) : t === me() ? 'دورك' : `دور ${C.short(t)}`;
-  return `<div class="players">${p(g.state.x, 'x')}<span class="vs">ضد</span>${p(g.state.o, 'o')}</div><p class="g-status${w ? ' end' : t === me() ? ' mine' : ''}">${esc(status)}</p>`;
+  const inv = pendingInvite(g) || declined(g);
+  const sc = seriesOf(g);
+  const showSc = g.state.prev || w;
+  const p = (u, s) => `<div class="pl${!w && !inv && t === u ? ' on' : ''}${w === u ? ' win' : ''}">${C.avatar(u, 'sm')}<b>${esc(u === me() ? 'أنت' : C.short(u))}</b><span class="pc ${s}"></span>${showSc ? `<span class="sc">${sc[u] || 0}</span>` : ''}</div>`;
+  const rs = resignedBy(g);
+  let status;
+  if (declined(g)) status = movesOf(g.id).some((m) => m.key === 'dec' && m.user_id === g.created_by) ? 'انلغى التحدي' : g.state.to === me() ? 'اعتذرت عن التحدي' : `${C.short(g.state.to)} اعتذر عن التحدي`;
+  else if (pendingInvite(g)) status = g.state.to === me() ? `${C.short(g.created_by)} يتحداك` : `ننتظر موافقة ${C.short(g.state.to)}`;
+  else if (w) status = w === 'draw' ? 'تعادل' : w === me() ? (rs ? `انسحب ${C.short(rs)}، فزت` : 'فزت! كفو') : (rs === me() ? 'انسحبت' : `فاز ${C.short(w)}`);
+  else status = t === me() ? 'دورك' : `دور ${C.short(t)}`;
+  const cls = w || inv ? ' end' : t === me() ? ' mine' : '';
+  return `<div class="players">${p(g.state.x, 'x')}<span class="vs">${showSc && sc.d ? `تعادل ${sc.d}` : 'ضد'}</span>${p(g.state.o, 'o')}</div><p class="g-status${cls}">${esc(status)}</p>${inviteBox(g)}`;
 }
-const turnFooter = (g) => `<div class="g-actions"><button class="btn ghost" data-a="chat">الدردشة</button>${winnerOf(g) ? '<button class="btn" data-a="rematch">جولة ثانية</button>' : ''}</div>`;
+// صندوق الدعوة (قبول / رفض) أو الانتظار
+function inviteBox(g) {
+  if (declined(g)) return '';
+  if (!pendingInvite(g)) return '';
+  if (g.state.to === me()) {
+    return `<div class="invite-card"><p>${esc(C.short(g.created_by))} ${g.state.prev ? 'يبي جولة ثانية' : `يتحداك في ${GINFO[g.kind].n}`}. تلعب؟</p>
+      <div class="g-actions"><button class="btn ghost" data-a="decline">لا، مو الحين</button><button class="btn" data-a="accept">يلا نلعب</button></div></div>`;
+  }
+  return `<div class="invite-card wait"><span class="dots"><i></i><i></i><i></i></span><p>أرسلنا التحدي لـ ${esc(C.short(g.state.to))}. اللعبة تبدأ أول ما يوافق.</p>
+    <div class="g-actions"><button class="btn ghost" data-a="cancel">إلغاء</button><button class="btn ghost" data-a="remind">ذكّره</button></div></div>`;
+}
+// تحت اللوحة: انسحاب أثناء اللعب، أو جولة ثانية بعد النهاية
+function turnFooter(g) {
+  const w = winnerOf(g);
+  const r = w ? rematchOf(g) : null;
+  let rbox = '';
+  if (r) {
+    if (pendingInvite(r)) {
+      rbox = r.state.to === me()
+        ? `<div class="invite-card" data-rg="${r.id}"><p>${esc(C.short(r.created_by))} يبي جولة ثانية. تلعب؟</p><div class="g-actions"><button class="btn ghost" data-a="r-decline">لا شكراً</button><button class="btn" data-a="r-accept">يلا</button></div></div>`
+        : `<div class="invite-card wait" data-rg="${r.id}"><span class="dots"><i></i><i></i><i></i></span><p>طلبت جولة ثانية. ننتظر موافقة ${esc(C.short(r.state.to))}.</p></div>`;
+    } else rbox = `<div class="g-actions" data-rg="${r.id}"><button class="btn" data-a="r-open">افتح الجولة الثانية</button></div>`;
+  }
+  const playing = !w && !pendingInvite(g) && !declined(g);
+  const meIn = g.state.x === me() || g.state.o === me();
+  return `${rbox}<div class="g-actions"><button class="btn ghost" data-a="chat">الدردشة</button>
+    ${playing && meIn && turnMoves(g.id).length ? '<button class="btn ghost danger" data-a="resign">انسحاب</button>' : ''}
+    ${w && !r && meIn ? '<button class="btn" data-a="rematch">جولة ثانية</button>' : ''}
+    ${declined(g) ? '<button class="btn" data-a="newfoe">تحدّى أحد ثاني</button>' : ''}</div>`;
+}
 function renderXO(g) {
   const mv = turnMoves(g.id);
   const b = xoBoard(mv);
   const w = xoWin(b);
   const last = mv.length ? mv[mv.length - 1].data.i : -1;
-  return turnHeader(g) + `<div class="xo">${b.map((s, i) => `<button data-cell="${i}" class="${s || ''}${w?.line?.includes(i) ? ' wl' : ''}${i === last ? ' last' : ''}" ${s || w ? 'disabled' : ''} aria-label="خانة ${i + 1}">${s === 'x' ? '<i class="mx"></i>' : s === 'o' ? '<i class="mo"></i>' : ''}</button>`).join('')}</div>` + turnFooter(g);
+  const lock = w || pendingInvite(g) || declined(g) || resignedBy(g);
+  return turnHeader(g) + `<div class="xo${pendingInvite(g) || declined(g) ? ' dim' : ''}">${b.map((s, i) => `<button data-cell="${i}" class="${s || ''}${w?.line?.includes(i) ? ' wl' : ''}${i === last ? ' last' : ''}" ${s || lock ? 'disabled' : ''} aria-label="خانة ${i + 1}">${s === 'x' ? '<i class="mx"></i>' : s === 'o' ? '<i class="mo"></i>' : ''}</button>`).join('')}</div>` + turnFooter(g);
 }
 function renderC4(g) {
   const mv = turnMoves(g.id);
@@ -644,21 +720,44 @@ function renderC4(g) {
   const wset = new Set((w?.cells || []).map(([r, c]) => r + ':' + c));
   let lastCell = '';
   if (mv.length) { const c = mv[mv.length - 1].data.c; for (let r = 0; r < 6; r++) if (b[r][c]) { lastCell = r + ':' + c; break; } }
-  return turnHeader(g) + `<div class="c4">${[0, 1, 2, 3, 4, 5, 6].map((c) => `<button class="col" data-col="${c}" ${b[0][c] || w ? 'disabled' : ''} aria-label="عمود ${c + 1}">${b.map((row, r) => `<i class="${row[c] || ''}${wset.has(r + ':' + c) ? ' wl' : ''}${lastCell === r + ':' + c ? ' drop' : ''}" style="--r:${r}"></i>`).join('')}</button>`).join('')}</div>` + turnFooter(g);
+  const lock = w || pendingInvite(g) || declined(g) || resignedBy(g);
+  return turnHeader(g) + `<div class="c4${pendingInvite(g) || declined(g) ? ' dim' : ''}">${[0, 1, 2, 3, 4, 5, 6].map((c) => `<button class="col" data-col="${c}" ${b[0][c] || lock ? 'disabled' : ''} aria-label="عمود ${c + 1}">${b.map((row, r) => `<i class="${row[c] || ''}${wset.has(r + ':' + c) ? ' wl' : ''}${lastCell === r + ':' + c ? ' drop' : ''}" style="--r:${r}"></i>`).join('')}</button>`).join('')}</div>` + turnFooter(g);
 }
 async function playTurn(g, data) {
-  if (winnerOf(g)) return;
+  if (winnerOf(g) || declined(g)) return;
+  if (pendingInvite(g)) return C.toast(g.state.to === me() ? 'اقبل التحدي أول' : 'ننتظر موافقته');
   if (turnOf(g) !== me()) return C.toast('مو دورك، انتظر');
   const n = turnMoves(g.id).length;
   const ok = await move(g, 'm' + n, data, false);
   if (!ok) return;
-  const w = winnerOf(g);
-  if (w) {
-    C.sb.from('games').update({ status: 'done' }).eq('id', g.id).then(() => {});
-    g.status = 'done';
-  } else {
-    C.notify(g.chat_id, 'turn', g.state.x === me() ? g.state.o : g.state.x);
-  }
+  if (winnerOf(g)) finishGame(g);
+  else C.notify(g.chat_id, 'turn', g.state.x === me() ? g.state.o : g.state.x);
+}
+function finishGame(g) {
+  C.sb.from('games').update({ status: 'done' }).eq('id', g.id).then(() => {});
+  g.status = 'done';
+}
+async function acceptInvite(g, open) {
+  if (g.state.to !== me()) return;
+  const ok = await move(g, 'acc', {}, true);
+  if (!ok) return;
+  sfx('ding');
+  C.notify(g.chat_id, 'accept', g.created_by);
+  if (open || G.open?.id !== g.id) openGame(g.id);
+}
+async function declineInvite(g) {
+  if (g.state.to !== me()) return;
+  await move(g, 'dec', {}, true);
+  finishGame(g);
+  C.toast('اعتذرنا عنك بلطف');
+}
+// جولة ثانية: نرسل طلب للخصم، ويبدأ اللي بدأ ثاني المرة اللي فاتت
+async function askRematch(g) {
+  if (rematchOf(g)) return;
+  const other = g.state.x === me() ? g.state.o : g.state.x;
+  const sc = seriesOf(g);
+  const r = await createGame(g.kind, g.chat_id, { x: g.state.o, o: g.state.x, to: other, prev: g.id, sc }, 'جولة ثانية', true);
+  if (r) C.toast('أرسلنا الطلب، ننتظر موافقته');
 }
 
 // ---------- كلمة اليوم ----------

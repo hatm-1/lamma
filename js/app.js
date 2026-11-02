@@ -3,7 +3,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { CONFIG } from './config.js';
 import { deriveFromPassphrase, importKey, encJSON, decJSON, encBytes, decBytes } from './crypto.js';
 import { initCalls, startCall } from './calls.js';
-import { sfx, unlockAudio, bindTapSounds, soundPrefs, setSoundPref, confetti } from './sound.js';
+import { sfx, unlockAudio, bindTapSounds, soundPrefs, setSoundPref, confetti, SOUND_STYLES } from './sound.js';
 import { initGames, loadGames, renderGamesPane, onGameChange, openGame, gameIsOpen, closeGame, GICON, GINFO, myTurns } from './games.js';
 
 // ================= أدوات =================
@@ -188,19 +188,43 @@ applyTheme(themeMode());
 try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyColors); } catch (e) { /* ignore */ }
 
 // ================= الكيبورد في الآيفون =================
+// الآيفون لما يطلع الكيبورد يزحلق الصفحة كلها لفوق. هنا نرجّعها مكانها
+// ونخلي شاشة المحادثة بطول المساحة اللي فوق الكيبورد بالضبط
 function fitViewport() {
   const vv = window.visualViewport;
   if (!vv) return;
-  const fit = () => {
-    const c = $('#chat');
-    c.style.height = vv.height + 'px';
-    c.style.top = vv.offsetTop + 'px';
-    c.style.bottom = 'auto';
-    if (S.open && document.activeElement === $('#msgInp')) { const b = $('#msgs'); b.scrollTop = b.scrollHeight; }
+  const root = document.documentElement;
+  const msgs = $('#msgs');
+  let raf = 0, lastH = 0, nearBottom = true;
+  msgs.addEventListener('scroll', () => { nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80; }, { passive: true });
+  const apply = () => {
+    raf = 0;
+    if (window.scrollY || root.scrollTop || document.body.scrollTop) window.scrollTo(0, 0);
+    const h = Math.round(vv.height);
+    const top = Math.max(0, Math.round(vv.offsetTop));
+    const kb = window.innerHeight - h > 140;
+    root.style.setProperty('--vvh', h + 'px');
+    root.style.setProperty('--vvt', top + 'px');
+    document.body.classList.toggle('kb', kb);
+    if (h !== lastH) {
+      const grew = h > lastH;
+      lastH = h;
+      // لما الكيبورد يطلع، خل آخر رسالة باينة (إذا كنت أصلاً تحت)
+      if (S.open && nearBottom && !grew) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
+    }
   };
-  vv.addEventListener('resize', fit);
-  vv.addEventListener('scroll', fit);
-  fit();
+  const q = () => { if (!raf) raf = requestAnimationFrame(apply); };
+  vv.addEventListener('resize', q);
+  vv.addEventListener('scroll', q);
+  addEventListener('scroll', q, { passive: true });
+  addEventListener('focusout', () => setTimeout(q, 60));
+  // والكيبورد طالع: السحب على أي مكان ما ينسحب (يمنع الشاشة تطلع وتعلق)، إلا الأماكن اللي تنسحب أصلاً
+  addEventListener('touchmove', (e) => {
+    if (!document.body.classList.contains('kb')) return;
+    if (e.target.closest?.('.msgs, .sheet, textarea, .pane, .game-body, .info-body, #game, #info, .sv-foot')) return;
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+  apply();
 }
 
 // ================= البداية =================
@@ -396,7 +420,7 @@ async function start() {
   initGames({
     sb, me: () => S.me, members: () => S.members, chats: () => S.chats, chatOf, chatName, nameOf, short, avatar, chatAvatar, esc, toast,
     openSheet, closeSheet, sendTo, notify, hydrate, ICON, listTime, memberRows, openDirect,
-    openChat: (id) => openChat(id), tab: () => S.tab, onBadge: () => badge(), sfx, confetti,
+    openChat: (id) => openChat(id), tab: () => S.tab, onBadge: () => badge(), sfx, confetti, ask,
   });
   await Promise.all([loadMembers(), loadChats(), loadStories(), loadBlocks(), loadGames()]);
   show('main');
@@ -1085,7 +1109,9 @@ function renderMsgs(forceBottom) {
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
   let html = o.more ? '<button class="btn ghost more" id="moreBtn">رسائل أقدم</button>' : '';
   if (!o.msgs.length) html += emptyState(o.chat.is_direct ? ICON.chat : ICON.users, 'ابدأ المحادثة', 'الرسائل مشفرة من طرف لطرف');
-  o.msgs.forEach((m, i) => { html += msgHTML(m, o.msgs[i - 1]); });
+  const hid = hiddenMsgs();
+  const list = hid.size ? o.msgs.filter((m) => !hid.has(m.id)) : o.msgs;
+  list.forEach((m, i) => { html += msgHTML(m, list[i - 1]); });
   box.innerHTML = html;
   hydrate(box);
   if (S.voice) {
@@ -1094,6 +1120,18 @@ function renderMsgs(forceBottom) {
   }
   if (forceBottom || near) box.scrollTop = box.scrollHeight;
   $$('img.pic', box).forEach((img) => img.addEventListener('load', () => { if (forceBottom || near) box.scrollTop = box.scrollHeight; }, { once: true }));
+}
+
+// "حذف عندي": الرسالة تختفي من جوالك بس
+function hiddenMsgs() {
+  if (!S.hidden) { try { S.hidden = new Set(JSON.parse(localStorage.getItem('lamma-hidden') || '[]')); } catch (e) { S.hidden = new Set(); } }
+  return S.hidden;
+}
+function hideMsg(id) {
+  const h = hiddenMsgs();
+  h.add(id);
+  try { localStorage.setItem('lamma-hidden', JSON.stringify([...h].slice(-3000))); } catch (e) { /* ignore */ }
+  renderMsgs();
 }
 
 function markRead() {
@@ -1195,7 +1233,7 @@ function bindChat() {
     if (e.target.closest('.voice')) return;
     const jump = e.target.closest('[data-jump]');
     if (jump) return jumpTo(jump.dataset.jump);
-    if (e.target.dataset.view && e.target.src) return viewImage(e.target.src);
+    if (e.target.dataset.view && e.target.src) return viewImage(e.target.src, e.target.closest('.m')?.dataset.id);
     const m = e.target.closest('.m');
     if (m) msgSheet(m.dataset.id);
   };
@@ -1218,6 +1256,7 @@ function msgSheet(id) {
     ${hasText ? `<button class="act" data-a="copy"><span class="ic">${ICON.copy}</span>نسخ</button>` : ''}
     ${m.kind === 'image' ? `<button class="act" data-a="save"><span class="ic">${ICON.download}</span>حفظ الصورة</button>` : ''}
     ${mine ? `<button class="act" data-a="info"><span class="ic">${ICON.info}</span>مين قرأها</button>` : ''}
+    <button class="act red" data-a="hide"><span class="ic">${ICON.trash}</span>حذف عندي</button>
     ${mine ? `<button class="act red" data-a="del"><span class="ic">${ICON.trash}</span>حذف عند الجميع</button>` : ''}
   `, async (e) => {
     const rxb = e.target.closest('[data-rx]');
@@ -1254,6 +1293,9 @@ function msgSheet(id) {
       l.href = url; l.download = 'lamma-' + Date.now() + '.jpg'; l.click();
     } else if (a === 'info') {
       readInfoSheet(m);
+    } else if (a === 'hide') {
+      if (!(await ask('تحذف الرسالة من جوالك بس؟ أهلك بيظل يشوفونها', 'حذف عندي', true))) return;
+      hideMsg(m.id);
     } else if (a === 'del') {
       if (!(await ask('تحذف الرسالة عند الجميع؟', 'حذف عند الجميع', true))) return;
       const { error } = await sb.from('messages').delete().eq('id', m.id);
@@ -1289,14 +1331,32 @@ async function toggleStar(m) {
 function bindSwipeReply() {
   const box = $('#msgs');
   let st = null;
+  let lp = 0;
+  const cancelLP = () => { clearTimeout(lp); lp = 0; };
   box.addEventListener('pointerdown', (e) => {
     const m = e.target.closest('.m');
     if (!m || e.target.closest('.play,a,button,.bar')) return;
     st = { m, x: e.clientX, y: e.clientY, dx: 0, on: false };
+    // ضغطة مطوّلة على أي رسالة (حتى الصور) تفتح الخيارات
+    cancelLP();
+    if (!m.querySelector('.sys') && m.dataset.id) {
+      lp = setTimeout(() => {
+        lp = 0;
+        st = null;
+        S.suppressClick = Date.now() + 400;
+        try { navigator.vibrate?.(12); } catch (x) { /* ignore */ }
+        m.classList.add('held');
+        setTimeout(() => m.classList.remove('held'), 260);
+        msgSheet(m.dataset.id);
+      }, 430);
+    }
   });
+  box.addEventListener('contextmenu', (e) => { if (e.target.closest('.m')) e.preventDefault(); });
+  box.addEventListener('scroll', cancelLP, { passive: true });
   box.addEventListener('pointermove', (e) => {
     if (!st) return;
     const dx = e.clientX - st.x, dy = e.clientY - st.y;
+    if (lp && Math.hypot(dx, dy) > 8) cancelLP();
     if (!st.on) {
       if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { st = null; return; }
       if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
@@ -1310,6 +1370,7 @@ function bindSwipeReply() {
     if (Math.abs(st.dx) >= 60 && !st.buzz) { st.buzz = 1; try { navigator.vibrate?.(10); } catch (x) { /* ignore */ } }
   });
   const end = () => {
+    cancelLP();
     if (!st) return;
     const s = st;
     st = null;
@@ -1422,12 +1483,42 @@ function imageSheet(file) {
     }
   };
 }
-function viewImage(src) {
+function viewImage(src, msgId) {
   const v = $('#viewer');
+  const m = msgId ? S.open?.msgs.find((x) => x.id === msgId && !x.pending) : null;
+  const mine = m?.sender === S.me;
   v.className = 'overlay imgview';
-  v.innerHTML = `<img src="${esc(src)}" alt=""><button class="glass-btn dark sv-close" data-a="x" aria-label="إغلاق">${ICON.close}</button>`;
-  v.onclick = (e) => { if (e.target.closest('[data-a=x]')) history.back(); };
-  swipeDown(v, { onTap: () => history.back() });
+  const btn = (a, ic, l, red) => `<button data-a="${a}" class="${red ? 'red' : ''}"><span>${ic}</span><small>${l}</small></button>`;
+  v.innerHTML = `<img src="${esc(src)}" alt=""><button class="glass-btn dark sv-close" data-a="x" aria-label="إغلاق">${ICON.close}</button>
+    ${m ? `<div class="iv-bar">${btn('reply', ICON.reply, 'رد')}${btn('fwd', ICON.forward, 'تحويل')}${btn('save', ICON.download, 'حفظ')}${btn('del', ICON.trash, mine ? 'حذف' : 'حذف عندي', true)}</div>` : ''}`;
+  v.onclick = async (e) => {
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (!a) return;
+    if (a === 'x') return history.back();
+    if (!m) return;
+    if (a === 'save') {
+      const l = document.createElement('a');
+      l.href = src; l.download = 'lamma-' + Date.now() + '.jpg'; l.click();
+      return toast('اضغط مطوّل على الصورة واختر «حفظ في الصور» إذا ما انحفظت', 3500);
+    }
+    history.back();
+    await new Promise((r) => setTimeout(r, 180));
+    if (a === 'reply') startReply(m.id);
+    else if (a === 'fwd') forwardSheet([m]);
+    else if (a === 'del') {
+      if (!mine) {
+        if (await ask('تحذف الصورة من جوالك بس؟ أهلك بيظل يشوفونها', 'حذف عندي', true)) hideMsg(m.id);
+        return;
+      }
+      const choice = await ask('تحذف الصورة عند الجميع؟', 'حذف عند الجميع', true);
+      if (!choice) return;
+      const { error } = await sb.from('messages').delete().eq('id', m.id);
+      if (error) return toast('ما انحذفت');
+      if (m.b?.m?.p) sb.storage.from('media').remove([m.b.m.p]);
+      onMessageGone(m.id);
+    }
+  };
+  swipeDown(v, { onTap: () => v.classList.toggle('bare') });
   history.pushState({ v: 1 }, '');
 }
 
@@ -2072,7 +2163,18 @@ function soundsSheet() {
     ${row('taps', 'صوت الضغط', 'نقرة خفيفة لما تضغط الأزرار')}
     ${row('msgs', 'أصوات الرسائل', 'لما ترسل أو توصلك رسالة والتطبيق مفتوح')}
     ${row('games', 'أصوات الألعاب', 'العجلة، والفوز، والإجابات')}
-  </div><p class="hint" style="margin:0 20px">إذا الجوال على الصامت، ممكن ما تسمع الأصوات.</p>`, (e) => {
+  </div>
+  <p class="section-t" style="margin:14px 20px 6px">نغمة الرسائل (اضغط عشان تسمعها)</p>
+  <div class="form"><div class="seg" id="sndStyle">${Object.entries(SOUND_STYLES).map(([k, l]) => `<button type="button" data-st="${k}" class="${p.style === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+  <p class="hint" style="margin:0 20px">إذا الجوال على الصامت، ما تسمع الأصوات.</p>`, (e) => {
+    const st = e.target.closest('[data-st]');
+    if (st) {
+      setSoundPref('style', st.dataset.st);
+      $$('#sndStyle button').forEach((x) => x.classList.toggle('on', x === st));
+      sfx('send', true);
+      setTimeout(() => sfx('receive', true), 650);
+      return;
+    }
     const b = e.target.closest('[data-snd]');
     if (!b) return;
     const k = b.dataset.snd;
@@ -2412,6 +2514,37 @@ async function setupPush(interactive) {
   renderSettings();
 }
 
+// صفحة الإشعارات: تجربة وتشخيص
+function pushSheet() {
+  openSheet(`<h3>الإشعارات</h3><div class="form">
+    <p>الإشعارات مفعّلة على هذا الجهاز. جرّبها: اضغط الزر، وبعدها <b>اطلع من التطبيق</b> للشاشة الرئيسية، وخلال 8 ثواني يوصلك إشعار تجربة.</p>
+    <button class="btn" id="pushTest">أرسل لي إشعار تجربة</button>
+    <button class="btn ghost" id="pushRe">إعادة تفعيل الإشعارات</button>
+    <p class="hint" id="pushRes"></p>
+    <p class="hint">إذا ما وصل: افتح <b>الإعدادات</b> في الجوال ← <b>الإشعارات</b> ← <b>لمّة</b>، وتأكد أن «السماح بالإشعارات» و«الشعارات» شغّالة، وأن وضع التركيز (عدم الإزعاج) مطفي.</p>
+  </div>`);
+  $('#pushRe').onclick = async () => {
+    try { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) { await sb.from('push_subs').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); } } catch (e) { /* ignore */ }
+    await setupPush(true);
+    $('#pushRes') && ($('#pushRes').textContent = 'تم. جرّب إشعار التجربة الحين.');
+  };
+  $('#pushTest').onclick = async () => {
+    const out = $('#pushRes');
+    out.textContent = 'نرسل…';
+    await setupPush(false);
+    const { data, error } = await sb.functions.invoke('notify', { body: { kind: 'test', delay: 7 } });
+    if (error) {
+      let d = '';
+      try { d = JSON.stringify(await error.context?.json?.()); } catch (e) { d = String(error.message || error); }
+      out.textContent = 'ما اشتغلت وظيفة الإشعارات: ' + (d || error.message);
+      return;
+    }
+    if (!data?.subs) out.textContent = 'ما لقينا جهازك مسجّل. اضغط «إعادة تفعيل الإشعارات» وجرّب مرة ثانية.';
+    else if (data.sent) out.textContent = `انرسل لـ ${data.sent} جهاز. اطلع من التطبيق الحين وانتظر.`;
+    else out.textContent = 'رفض سيرفر أبل الإشعار: ' + (data.errors || []).join(' | ');
+  };
+}
+
 function meTab() {
   const t = $('#meTab');
   if (!t || !S.members.get(S.me)) return;
@@ -2488,7 +2621,7 @@ function renderSettings() {
       <button class="set-row" data-a="lock"><span class="ic tile" style="--c:#6B7280">${ICON.lock}</span><span>عن التشفير</span><i class="chev">${ICON.chevron}</i></button>
       <button class="set-row" data-a="out" style="color:var(--danger)"><span class="ic tile" style="--c:#D93025">${ICON.logout}</span><span>تسجيل خروج من هذا الجهاز</span></button>
     </div>
-    <p class="lock-note">لمّة · نسخة 1.0 · مشفّر من طرف لطرف</p>`;
+    <p class="lock-note">لمّة · نسخة 1.1 · مشفّر من طرف لطرف</p>`;
   hydrate(pane);
   $('#avFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) changeAvatar(f); };
   pane.onclick = async (e) => {
@@ -2499,11 +2632,11 @@ function renderSettings() {
     else if (a === 'colors') colorsSheet();
     else if (a === 'photo') $('#avFile').click();
     else if (a === 'edit') editProfileSheet();
-    else if (a === 'push') setupPush(true);
+    else if (a === 'push') { if (pushState() === 'granted') pushSheet(); else setupPush(true); }
     else if (a === 'install') {
       if (installEvt) { installEvt.prompt(); installEvt = null; }
       else openSheet(`<h3>تثبيت لمّة</h3><div class="form">${isIOS
-        ? '<p>1. افتح الرابط في <b>Safari</b><br>2. اضغط زر المشاركة <i class="pv">${ICON.share}</i> تحت<br>3. اختر «إضافة إلى الشاشة الرئيسية»<br>4. افتح لمّة من الأيقونة وفعّل الإشعارات</p>'
+        ? `<p>1. افتح الرابط في <b>Safari</b><br>2. اضغط زر المشاركة <i class="pv">${ICON.share}</i> تحت<br>3. اختر «إضافة إلى الشاشة الرئيسية»<br>4. افتح لمّة من الأيقونة وفعّل الإشعارات</p>`
         : '<p>1. افتح الرابط في <b>Chrome</b><br>2. اضغط القائمة <b>⋮</b> فوق<br>3. اختر «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية»</p>'}</div>`);
     } else if (a === 'members') {
       openSheet(`<h3>أفراد العائلة</h3><div class="row">${avatar(S.me, 'sm')}<div class="row-main"><div class="row-top"><b>${esc(me.name)} (أنت)</b></div></div></div>${memberRows()}`, async (ev) => {

@@ -2,7 +2,8 @@
 let ac = null;
 let master = null;
 
-const DEFAULTS = { taps: true, msgs: true, games: true };
+const DEFAULTS = { taps: true, msgs: true, games: true, style: 'soft' };
+export const SOUND_STYLES = { soft: 'ناعم', bubble: 'فقاعة', glass: 'زجاجي' };
 export function soundPrefs() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('lamma-sound') || '{}') }; } catch (e) { return { ...DEFAULTS }; }
 }
@@ -16,10 +17,17 @@ function ctx() {
     const A = window.AudioContext || window.webkitAudioContext;
     if (!A) return null;
     try {
+      // ما يوقف الموسيقى اللي شغالة، ويحترم زر الصامت
+      try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) { /* ignore */ }
       ac = new A();
       master = ac.createGain();
       master.gain.value = 0.9;
-      master.connect(ac.destination);
+      // ضاغط خفيف يمنع الصوت الحاد والتقطيع
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.002; comp.release.value = 0.12;
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 7500;
+      master.connect(lp).connect(comp).connect(ac.destination);
     } catch (e) { return null; }
   }
   if (ac.state === 'suspended') ac.resume().catch(() => {});
@@ -74,12 +82,65 @@ function noise({ t = 0.03, vol = 0.12, at = 0, hp = 2000 }) {
   s.start(now);
 }
 
+// نغمة ناعمة مثل الماريمبا: موجة أساسية + توافقية خفيفة تختفي بسرعة
+function pluck(f, { t = 0.3, vol = 0.1, at = 0, bright = 0.25 } = {}) {
+  tone({ f, t, vol, at, attack: 0.006 });
+  if (bright) tone({ f: f * 2.01, t: t * 0.35, vol: vol * bright, at, attack: 0.004 });
+}
+// "ووش" هوائي: ضوضاء تمر من فلتر يتحرك
+function whoosh({ t = 0.2, vol = 0.09, at = 0, from = 700, to = 3200, q = 1.6 } = {}) {
+  const c = ctx();
+  if (!c) return;
+  const now = c.currentTime + at;
+  const len = Math.max(1, Math.floor(c.sampleRate * t));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const s = c.createBufferSource();
+  s.buffer = buf;
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass'; bp.Q.value = q;
+  bp.frequency.setValueAtTime(from, now);
+  bp.frequency.exponentialRampToValueAtTime(to, now + t);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(vol, now + t * 0.35);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + t);
+  s.connect(bp).connect(g).connect(master);
+  s.start(now);
+  s.stop(now + t + 0.02);
+}
+// فقاعة: نغمة ترتفع بسرعة وتختفي
+function bubble(f, { vol = 0.12, at = 0, t = 0.11 } = {}) {
+  tone({ f, f2: f * 1.9, t, vol, at, attack: 0.003 });
+}
+
+// أصوات الرسائل بثلاث أنماط تختارها من الإعدادات
+const MSG_SOUNDS = {
+  soft: {
+    send: () => { whoosh({ t: 0.17, vol: 0.07 }); pluck(1175, { t: 0.16, vol: 0.05, at: 0.07, bright: 0 }); },
+    receive: () => { pluck(988, { t: 0.22, vol: 0.075 }); },
+    notify: () => { pluck(1319, { t: 0.28, vol: 0.08 }); pluck(988, { t: 0.4, vol: 0.07, at: 0.11 }); },
+  },
+  bubble: {
+    send: () => { bubble(520, { vol: 0.11 }); },
+    receive: () => { bubble(380, { vol: 0.1, t: 0.09 }); bubble(560, { vol: 0.06, t: 0.08, at: 0.07 }); },
+    notify: () => { bubble(440, { vol: 0.1 }); bubble(660, { vol: 0.09, at: 0.1 }); },
+  },
+  glass: {
+    send: () => { pluck(1568, { t: 0.18, vol: 0.06, bright: 0.4 }); },
+    receive: () => { pluck(2093, { t: 0.35, vol: 0.05, bright: 0.5 }); },
+    notify: () => { pluck(1760, { t: 0.4, vol: 0.06, bright: 0.5 }); pluck(2349, { t: 0.5, vol: 0.05, at: 0.12, bright: 0.5 }); },
+  },
+};
+const msgSound = (k) => () => (MSG_SOUNDS[soundPrefs().style] || MSG_SOUNDS.soft)[k]();
+
 const SFX = {
-  tap: () => { tone({ f: 1500, f2: 900, t: 0.035, type: 'sine', vol: 0.06 }); },
-  toggle: () => { tone({ f: 900, f2: 1300, t: 0.06, vol: 0.08 }); },
-  send: () => { tone({ f: 520, f2: 1040, t: 0.12, type: 'sine', vol: 0.12 }); noise({ t: 0.06, vol: 0.03, hp: 4000 }); },
-  receive: () => { tone({ f: 880, t: 0.09, vol: 0.1 }); tone({ f: 1320, t: 0.14, vol: 0.09, at: 0.08 }); },
-  notify: () => { tone({ f: 1046, t: 0.1, vol: 0.1 }); tone({ f: 1568, t: 0.18, vol: 0.09, at: 0.09 }); },
+  tap: () => { tone({ f: 1500, f2: 900, t: 0.035, type: 'sine', vol: 0.05 }); },
+  toggle: () => { tone({ f: 900, f2: 1300, t: 0.06, vol: 0.07 }); },
+  send: msgSound('send'),
+  receive: msgSound('receive'),
+  notify: msgSound('notify'),
   tick: () => { noise({ t: 0.018, vol: 0.22, hp: 2500 }); tone({ f: 2600, t: 0.02, type: 'triangle', vol: 0.05 }); },
   pop: () => { tone({ f: 420, f2: 820, t: 0.09, type: 'triangle', vol: 0.14 }); },
   drop: () => { tone({ f: 300, f2: 90, t: 0.16, type: 'sine', vol: 0.22 }); noise({ t: 0.04, vol: 0.06, hp: 800, at: 0.1 }); },
@@ -92,9 +153,16 @@ const SFX = {
   ding: () => { tone({ f: 1318, t: 0.5, type: 'sine', vol: 0.14 }); tone({ f: 1976, t: 0.4, type: 'sine', vol: 0.05, at: 0.01 }); },
 };
 const GROUP = { tap: 'taps', toggle: 'taps', key: 'taps', send: 'msgs', receive: 'msgs', notify: 'msgs' };
-export function sfx(name) {
+const lastPlay = {};
+export function sfx(name, force) {
   const grp = GROUP[name] || 'games';
-  if (!soundPrefs()[grp]) return;
+  if (!force && !soundPrefs()[grp]) return;
+  // لو وصلت رسايل كثيرة ورا بعض، صوت واحد يكفي
+  if (name === 'receive' || name === 'notify') {
+    const now = Date.now();
+    if (now - (lastPlay[name] || 0) < 900) return;
+    lastPlay[name] = now;
+  }
   try { SFX[name]?.(); } catch (e) { /* ignore */ }
 }
 
