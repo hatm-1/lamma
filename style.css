@@ -889,3 +889,35 @@ body.has-call .msgs { padding-top: calc(var(--safe-t) + 118px); }
 .vote-grid button { transition: transform .1s; }
 #forgotBtn { align-self: center; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .pl.on { animation: none; } }
+
+/* ===== v5: الكيبورد، خيارات الصور، تحديات الألعاب ===== */
+html { overflow: hidden; height: 100%; }
+/* شاشة المحادثة والقوائم بطول المساحة اللي فوق الكيبورد */
+#chat, .sheet-wrap { top: var(--vvt, 0px); bottom: auto; height: var(--vvh, 100%); }
+#chat { transition: transform .22s ease; }
+body.kb .composer, body.kb .recbar { padding-bottom: 8px; }
+body.kb .sheet { padding-bottom: 12px; max-height: calc(var(--vvh, 100dvh) - 20px); }
+/* الضغط المطوّل على الصور يفتح خياراتنا مو خيارات الآيفون */
+.msgs { -webkit-user-select: none; user-select: none; }
+.msgs img, .msgs .bub { -webkit-touch-callout: none; }
+.m.held .bub { transform: scale(.97); transition: transform .15s ease; }
+.imgview .iv-bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-around; padding: 12px 12px calc(var(--safe-b) + 14px); background: linear-gradient(transparent, rgba(0,0,0,.75)); transition: opacity .2s; }
+.imgview .iv-bar button { background: none; border: 0; color: #fff; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; min-width: 64px; padding: 6px; }
+.imgview .iv-bar button span { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.14); }
+.imgview .iv-bar button span svg { width: 22px; height: 22px; }
+.imgview .iv-bar button.red span { background: rgba(229,72,77,.3); }
+.imgview.bare .iv-bar, .imgview.bare .sv-close { opacity: 0; pointer-events: none; }
+/* التحديات */
+.invite-card { margin: 4px auto 0; width: min(360px, 92%); background: var(--surface); border: .5px solid var(--glass-line, var(--line)); border-radius: 20px; padding: 14px; text-align: center; box-shadow: var(--shadow); }
+.invite-card p { margin: 0 0 10px; font-weight: 700; }
+.invite-card.wait p { font-weight: 600; color: var(--muted); }
+.invite-card .g-actions { margin: 0; }
+.dots { display: inline-flex; gap: 5px; margin-bottom: 8px; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); animation: dotb 1.2s infinite ease-in-out; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dotb { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
+.xo.dim, .c4.dim { opacity: .35; filter: saturate(.4); pointer-events: none; }
+.pl .sc { position: absolute; top: -8px; left: -6px; min-width: 26px; height: 26px; border-radius: 13px; background: var(--primary); color: var(--on-primary, #fff); font-weight: 800; font-size: 14px; display: grid; place-items: center; padding: 0 6px; font-variant-numeric: tabular-nums; }
+.vs { font-size: 13px; color: var(--muted); font-weight: 700; }
+.g-status.end { color: var(--ink); }
+@media (prefers-reduced-motion: reduce) { .dots i { animation: none; } }

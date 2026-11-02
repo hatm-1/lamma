@@ -1,5 +1,5 @@
 // لمّة · عامل الخدمة: يشغّل التطبيق بدون نت، ويستقبل الإشعارات
-const VERSION = 'lamma-v4';
+const VERSION = 'lamma-v5';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/calls.js', './js/callui.js', './js/games.js', './js/gamedata.js', './js/sound.js', './js/crypto.js', './js/config.js',
@@ -54,13 +54,12 @@ self.addEventListener('push', (e) => {
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'لمّة', body: e.data ? e.data.text() : '' }; }
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const active = wins.some((w) => w.visibilityState === 'visible');
-    // لو التطبيق مفتوح قدامك، الرسائل العادية تطلع بدون صوت (المكالمات دايم بصوت)
+    const active = wins.some((w) => w.visibilityState === 'visible' && w.focused !== false);
+    // لازم يطلع إشعار لكل رسالة (الآيفون يوقف الإشعارات إذا ما طلع)
     await self.registration.showNotification(d.title || 'لمّة', {
       body: d.body || 'رسالة جديدة',
       tag: d.tag || 'lamma',
       renotify: true,
-      silent: active && !d.call,
       icon: 'icons/icon-192.png',
       badge: 'icons/badge-96.png',
       dir: 'rtl',
