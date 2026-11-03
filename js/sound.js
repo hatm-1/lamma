@@ -17,8 +17,6 @@ function ctx() {
     const A = window.AudioContext || window.webkitAudioContext;
     if (!A) return null;
     try {
-      // ما يوقف الموسيقى اللي شغالة، ويحترم زر الصامت
-      try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch (e) { /* ignore */ }
       ac = new A();
       master = ac.createGain();
       master.gain.value = 0.9;
@@ -34,6 +32,10 @@ function ctx() {
   return ac;
 }
 // الآيفون ما يسمح بالصوت إلا بعد أول لمسة
+// قبل المايك (تسجيل أو مكالمة) لازم وضع الصوت يسمح بالتسجيل
+export function micMode(on) {
+  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'play-and-record' : 'auto'; } catch (e) { /* ignore */ }
+}
 export function unlockAudio() {
   const once = () => {
     const c = ctx();

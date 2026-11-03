@@ -60,6 +60,7 @@ function newPC() {
 }
 
 async function getMedia(video) {
+  try { if (navigator.audioSession && navigator.audioSession.type !== 'auto') navigator.audioSession.type = 'auto'; } catch (e) { /* ignore */ }
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },

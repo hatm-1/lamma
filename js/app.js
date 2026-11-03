@@ -128,6 +128,25 @@ const standalone = matchMedia('(display-mode: standalone)').matches || navigator
 const touch = matchMedia('(pointer: coarse)').matches;
 const KEYSLOT = 'lamma-key:' + CONFIG.SUPABASE_URL;
 
+// ================= سجل الأخطاء (تشوفه من الإعدادات وترسله) =================
+const APP_VER = '1.3';
+const LOGK = 'lamma-log';
+function logErr(kind, msg) {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LOGK) || '[]');
+    const t = String(msg || '').slice(0, 400);
+    if (arr.length && arr[arr.length - 1].m === t) { arr[arr.length - 1].n = (arr[arr.length - 1].n || 1) + 1; }
+    else arr.push({ t: Date.now(), k: kind, m: t });
+    localStorage.setItem(LOGK, JSON.stringify(arr.slice(-60)));
+  } catch (e) { /* ignore */ }
+}
+addEventListener('error', (e) => logErr('خطأ', `${e.message} @${(e.filename || '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', (e) => logErr('وعد', e.reason?.message || e.reason?.name || String(e.reason)));
+{
+  const ce = console.error.bind(console);
+  console.error = (...a) => { logErr('سجل', a.map((x) => (x?.message || (typeof x === 'object' ? JSON.stringify(x) : String(x)))).join(' ')); ce(...a); };
+}
+
 // ================= الحالة =================
 const S = {
   me: null, key: null,
@@ -197,9 +216,22 @@ function fitViewport() {
   const msgs = $('#msgs');
   let raf = 0, lastH = 0, nearBottom = true;
   msgs.addEventListener('scroll', () => { nearBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80; }, { passive: true });
+  const editing = () => { const a = document.activeElement; return !!a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !/^(checkbox|radio|file|button|submit|range|color)$/i.test(a.type)) || a.isContentEditable); };
   const apply = () => {
     raf = 0;
     if (window.scrollY || root.scrollTop || document.body.scrollTop) window.scrollTo(0, 0);
+    // iOS 26 فيه خلل: بعد ما ينزل الكيبورد يظل يحسب الشاشة أقصر. فإذا ما فيه كتابة، نرجّع الشاشة كاملة ونتجاهل أرقامه
+    if (!editing()) {
+      root.style.removeProperty('--vvh');
+      root.style.removeProperty('--vvt');
+      // وفيه خلل ثاني: التطبيق المثبّت أحياناً يطلع أقصر من الشاشة ويبقى فراغ أسود تحت. نمدّه لين آخر الشاشة
+      const gap = standalone ? Math.round((screen.height || 0) - window.innerHeight) : 0;
+      if (gap > 0 && gap < 140 && Math.abs((screen.width || 0) - window.innerWidth) < 4) root.style.setProperty('--gapfix', gap + 'px');
+      else root.style.removeProperty('--gapfix');
+      document.body.classList.remove('kb');
+      lastH = 0;
+      return;
+    }
     const h = Math.round(vv.height);
     const top = Math.max(0, Math.round(vv.offsetTop));
     const kb = window.innerHeight - h > 140;
@@ -207,7 +239,7 @@ function fitViewport() {
     root.style.setProperty('--vvt', top + 'px');
     document.body.classList.toggle('kb', kb);
     if (h !== lastH) {
-      const grew = h > lastH;
+      const grew = lastH && h > lastH;
       lastH = h;
       // لما الكيبورد يطلع، خل آخر رسالة باينة (إذا كنت أصلاً تحت)
       if (S.open && nearBottom && !grew) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
@@ -217,7 +249,8 @@ function fitViewport() {
   vv.addEventListener('resize', q);
   vv.addEventListener('scroll', q);
   addEventListener('scroll', q, { passive: true });
-  addEventListener('focusout', () => setTimeout(q, 60));
+  addEventListener('focusout', () => { [60, 300, 700].forEach((t) => setTimeout(q, t)); });
+  addEventListener('focusin', () => { [60, 300, 600].forEach((t) => setTimeout(q, t)); });
   // والكيبورد طالع: السحب على أي مكان ما ينسحب (يمنع الشاشة تطلع وتعلق)، إلا الأماكن اللي تنسحب أصلاً
   addEventListener('touchmove', (e) => {
     if (!document.body.classList.contains('kb')) return;
@@ -547,7 +580,14 @@ async function uploadTo(path, blob) {
 }
 async function compressImage(file, max = 1600, q = 0.82) {
   let bmp;
-  try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) { bmp = await createImageBitmap(file); }
+  try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch (e) {
+    try { bmp = await createImageBitmap(file); } catch (e2) {
+      // بعض صيغ الآيفون: نفكها عن طريق عنصر صورة
+      const url = URL.createObjectURL(file);
+      bmp = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+  }
   const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
   const c = document.createElement('canvas');
@@ -1613,6 +1653,7 @@ let rec = null;
 async function startRec() {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('جهازك ما يدعم التسجيل');
   try {
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'auto') navigator.audioSession.type = 'auto'; } catch (x) { /* ignore */ }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const type = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find((t) => MediaRecorder.isTypeSupported(t)) || '';
     const mr = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
@@ -2619,12 +2660,55 @@ async function setupPush(interactive) {
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
     const { error } = await sb.from('push_subs').upsert({ endpoint: sub.endpoint, user_id: S.me, sub: sub.toJSON() });
     if (error) throw error;
+    // نتأكد إنه انحفظ فعلاً
+    const { data: chk } = await sb.from('push_subs').select('endpoint').eq('endpoint', sub.endpoint).maybeSingle();
+    if (!chk) throw new Error('الاشتراك ما انحفظ في قاعدة البيانات');
+    S.pushErr = '';
     if (interactive) toast('تم تفعيل الإشعارات');
   } catch (e) {
-    console.error(e);
-    if (interactive) toast('ما قدرنا نفعّل الإشعارات');
+    console.error('push setup', e);
+    S.pushErr = e?.message || String(e);
+    if (interactive) toast('ما قدرنا نفعّل الإشعارات: ' + S.pushErr, 4500);
   }
   renderSettings();
+}
+
+// تقرير الأخطاء: معلومات الجهاز + آخر الأخطاء، تنسخه وترسله
+async function diagReport() {
+  const vv = window.visualViewport;
+  const safeB = getComputedStyle(document.documentElement).getPropertyValue('--safe-b');
+  let sub = 'لا';
+  try { const reg = await navigator.serviceWorker?.getRegistration(); sub = (await reg?.pushManager?.getSubscription()) ? 'نعم' : 'لا'; } catch (e) { sub = 'خطأ'; }
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;bottom:0;height:env(safe-area-inset-bottom);visibility:hidden';
+  document.body.appendChild(probe); const sb_ = probe.offsetHeight; probe.remove();
+  const lines = [
+    `لمّة ${APP_VER} · ${new Date().toLocaleString('en-GB')}`,
+    `الجهاز: ${navigator.userAgent}`,
+    `مثبّت: ${standalone ? 'نعم' : 'لا'} · الشاشة ${screen.width}x${screen.height} · النافذة ${innerWidth}x${innerHeight} · المرئي ${vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' +' + Math.round(vv.offsetTop) : '-'} · الأمان تحت ${sb_}px ${safeB.trim()}`,
+    `الإشعارات: ${('Notification' in window) ? Notification.permission : 'غير مدعوم'} · اشتراك الجهاز: ${sub} · وضع الصوت: ${navigator.audioSession?.type || '-'}`,
+    `الاتصال الفوري: ${S.ch?.state || '-'} · المحادثات ${S.chats.length} · الأعضاء ${S.members.size}`,
+    '— آخر الأخطاء —',
+  ];
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem(LOGK) || '[]'); } catch (e) { /* ignore */ }
+  if (!arr.length) lines.push('ما فيه أخطاء مسجلة');
+  arr.slice().reverse().forEach((x) => lines.push(`${new Date(x.t).toLocaleString('en-GB')} [${x.k}]${x.n ? ' ×' + x.n : ''} ${x.m}`));
+  return lines.join('\n');
+}
+async function diagSheet() {
+  const txt = await diagReport();
+  openSheet(`<h3>تقرير الأخطاء</h3><div class="form">
+    <p class="hint">إذا صار شي غريب في التطبيق، انسخ التقرير وأرسله لي (لحاتم أو لـ Claude). ما فيه أي رسائل ولا كلمات سر.</p>
+    <pre class="diag" id="diagTxt"></pre>
+    <button class="btn" id="diagCopy">نسخ التقرير</button>
+    <button class="btn ghost" id="diagClear">مسح السجل</button></div>`);
+  $('#diagTxt').textContent = txt;
+  $('#diagCopy').onclick = () => navigator.clipboard?.writeText(txt).then(() => toast('انسخ، الصقه في المحادثة'), () => {
+    const r = document.createRange(); r.selectNodeContents($('#diagTxt')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    toast('حددناه لك، اضغط نسخ');
+  });
+  $('#diagClear').onclick = () => { try { localStorage.removeItem(LOGK); } catch (e) { /* ignore */ } closeSheet(); renderSettings(); toast('انمسح السجل'); };
 }
 
 // صفحة الإشعارات: تجربة وتشخيص
@@ -2652,9 +2736,11 @@ function pushSheet() {
       out.textContent = 'ما اشتغلت وظيفة الإشعارات: ' + (d || error.message);
       return;
     }
-    if (!data?.subs) out.textContent = 'ما لقينا جهازك مسجّل. اضغط «إعادة تفعيل الإشعارات» وجرّب مرة ثانية.';
-    else if (data.sent) out.textContent = `انرسل لـ ${data.sent} جهاز. اطلع من التطبيق الحين وانتظر.`;
+    if (data?.subs === undefined) out.textContent = 'وظيفة الإشعارات في Supabase قديمة. حدّثها من صفحة «كود الإشعارات» واضغط Deploy.';
+    else if (!data.subs) out.textContent = 'ما لقينا جهازك مسجّل. اضغط «إعادة تفعيل الإشعارات» وجرّب مرة ثانية.' + (S.pushErr ? ' (' + S.pushErr + ')' : '');
+    else if (data.sent) out.textContent = `انرسل لـ ${data.sent} جهاز. إذا ما طلع، المشكلة من إعدادات الإشعارات في الجوال.`;
     else out.textContent = 'رفض سيرفر أبل الإشعار: ' + (data.errors || []).join(' | ');
+    if (out.textContent && !data?.sent) logErr('إشعار', out.textContent);
   };
 }
 
@@ -2713,7 +2799,8 @@ function renderSettings() {
   const pane = $('#pane-settings');
   pane.innerHTML = `
     <div class="card set-card profile">
-      <button class="link" data-a="photo" style="text-decoration:none">${avatar(S.me, 'lg')}</button>
+      <button class="link av-edit" data-a="photo" aria-label="تغيير صورتك">${avatar(S.me, 'lg')}<span class="av-cam">${ICON.camera}</span></button>
+      <button class="link" data-a="photo" style="font-size:14px">${S.members.get(S.me)?.avatar ? 'تغيير الصورة' : 'أضف صورة'}</button>
       <h2>${esc(me.name || '')}</h2><p>${esc(me.about || 'اكتب نبذة عنك')}</p>
       <button class="btn ghost" data-a="edit" style="padding:8px 20px">تعديل الملف</button>
       <input type="file" id="avFile" accept="image/*" hidden>
@@ -2732,9 +2819,10 @@ function renderSettings() {
     </div>
     <div class="card set-card">
       <button class="set-row" data-a="lock"><span class="ic tile" style="--c:#6B7280">${ICON.lock}</span><span>عن التشفير</span><i class="chev">${ICON.chevron}</i></button>
+      <button class="set-row" data-a="diag"><span class="ic tile" style="--c:#0F8B8D">${ICON.info}</span><span>تقرير الأخطاء</span><small>${(() => { try { return JSON.parse(localStorage.getItem(LOGK) || '[]').length || ''; } catch (e) { return ''; } })()}</small><i class="chev">${ICON.chevron}</i></button>
       <button class="set-row" data-a="out" style="color:var(--danger)"><span class="ic tile" style="--c:#D93025">${ICON.logout}</span><span>تسجيل خروج من هذا الجهاز</span></button>
     </div>
-    <p class="lock-note">لمّة · نسخة 1.2 · مشفّر من طرف لطرف</p>`;
+    <p class="lock-note">لمّة · نسخة ${APP_VER} · مشفّر من طرف لطرف</p>`;
   hydrate(pane);
   $('#avFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) changeAvatar(f); };
   pane.onclick = async (e) => {
@@ -2745,6 +2833,7 @@ function renderSettings() {
     else if (a === 'colors') colorsSheet();
     else if (a === 'photo') $('#avFile').click();
     else if (a === 'edit') editProfileSheet();
+    else if (a === 'diag') diagSheet();
     else if (a === 'push') { if (pushState() === 'granted') pushSheet(); else setupPush(true); }
     else if (a === 'install') {
       if (installEvt) { installEvt.prompt(); installEvt = null; }
@@ -2777,10 +2866,21 @@ function renderSettings() {
 function editProfileSheet() {
   const me = S.members.get(S.me) || {};
   openSheet(`<h3>تعديل الملف</h3><div class="form">
+    <div class="pf-photo">${avatar(S.me, 'lg')}<div><button type="button" class="btn ghost" id="pfPic">${me.avatar ? 'تغيير الصورة' : 'أضف صورة'}</button>${me.avatar ? '<button type="button" class="link danger-link" id="pfNoPic">إزالة الصورة</button>' : ''}</div></div>
     <label>الاسم<input id="pfName" maxlength="40" value="${esc(me.name)}"></label>
     <label>نبذة<input id="pfAbout" maxlength="80" value="${esc(me.about || '')}" placeholder="مثال: الحمدلله دائماً"></label>
     <label>اللون<div class="emojis" id="pfColor">${COLORS.map((c) => `<button type="button" data-c="${c}" style="background:${c}" class="${c === me.color ? 'on' : ''}"></button>`).join('')}</div></label>
     <button class="btn" id="pfSave">حفظ</button></div>`);
+  hydrate($('#sheet'));
+  $('#pfPic').onclick = () => { closeSheet(); setTimeout(() => $('#avFile')?.click(), 50); };
+  if ($('#pfNoPic')) $('#pfNoPic').onclick = async () => {
+    const old = me.avatar;
+    const { error } = await sb.from('members').update({ avatar: null }).eq('id', S.me);
+    if (error) return toast('ما انشالت');
+    if (old) sb.storage.from('media').remove([old]);
+    me.avatar = null;
+    closeSheet(); meTab(); renderSettings(); renderList(); toast('انشالت الصورة');
+  };
   let color = me.color;
   $('#pfColor').onclick = (e) => {
     const b = e.target.closest('[data-c]'); if (!b) return;
