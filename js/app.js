@@ -129,7 +129,7 @@ const touch = matchMedia('(pointer: coarse)').matches;
 const KEYSLOT = 'lamma-key:' + CONFIG.SUPABASE_URL;
 
 // ================= سجل الأخطاء (تشوفه من الإعدادات وترسله) =================
-const APP_VER = '1.3';
+const APP_VER = '1.3.1';
 const LOGK = 'lamma-log';
 function logErr(kind, msg) {
   try {
@@ -224,10 +224,11 @@ function fitViewport() {
     if (!editing()) {
       root.style.removeProperty('--vvh');
       root.style.removeProperty('--vvt');
-      // وفيه خلل ثاني: التطبيق المثبّت أحياناً يطلع أقصر من الشاشة ويبقى فراغ أسود تحت. نمدّه لين آخر الشاشة
+      // وفيه خلل ثاني: التطبيق المثبّت أحياناً ما يوصل لآخر الشاشة (يبقى شريط أسود تحت خارج التطبيق).
+      // في هالحالة المسافة المحجوزة لخط الآيفون اللي تحت ما لها داعي، فنشيلها عشان شريط الكتابة والتبويبات ينزلون
       const gap = standalone ? Math.round((screen.height || 0) - window.innerHeight) : 0;
-      if (gap > 0 && gap < 140 && Math.abs((screen.width || 0) - window.innerWidth) < 4) root.style.setProperty('--gapfix', gap + 'px');
-      else root.style.removeProperty('--gapfix');
+      if (gap > 20 && gap < 160 && Math.abs((screen.width || 0) - window.innerWidth) < 4) root.style.setProperty('--safe-b', '4px');
+      else root.style.removeProperty('--safe-b');
       document.body.classList.remove('kb');
       lastH = 0;
       return;
