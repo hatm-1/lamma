@@ -946,3 +946,20 @@ body.kb .toast { bottom: 76px; }
 #main[data-tab="settings"], #main[data-tab="games"] { background: var(--group-bg); }
 #main[data-tab="settings"] .lg-head, #main[data-tab="games"] .lg-head { background: transparent; }
 #main[data-tab="settings"] .btn.ghost, #main[data-tab="games"] .btn.ghost { background: var(--cell); }
+
+/* ===== v7: شريط التبويبات أنزل + علاج فراغ iOS 26 تحت ===== */
+:root { --gapfix: 0px; }
+.screen { bottom: auto; height: calc(100% + var(--gapfix)); }
+#chat, .sheet-wrap { height: var(--vvh, calc(100% + var(--gapfix))); }
+.tabbar { bottom: max(8px, calc(var(--safe-b) - 10px - var(--gapfix))); }
+.composer, .recbar { padding-bottom: max(10px, calc(var(--safe-b) - 2px)); }
+body.kb .composer, body.kb .recbar { padding-bottom: 8px; }
+.pane { padding-bottom: calc(var(--safe-b) + 96px); }
+/* تغيير الصورة الشخصية */
+.av-edit { position: relative; text-decoration: none; }
+.av-cam { position: absolute; bottom: 2px; left: 2px; width: 34px; height: 34px; border-radius: 50%; background: var(--primary); color: var(--on-primary); display: grid; place-items: center; border: 3px solid var(--group-bg, var(--bg)); }
+.av-cam svg { width: 18px; height: 18px; }
+.pf-photo { display: flex; align-items: center; gap: 14px; }
+.pf-photo > div { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.danger-link { color: var(--danger, #E5484D); font-size: 14px; }
+.diag { direction: ltr; text-align: left; white-space: pre-wrap; word-break: break-word; font: 11.5px/1.5 ui-monospace, Menlo, monospace; background: var(--surface-2); color: var(--ink); border-radius: 12px; padding: 10px; max-height: 42vh; overflow: auto; margin: 0; -webkit-user-select: text; user-select: text; }
