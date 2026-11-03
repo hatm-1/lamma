@@ -1,5 +1,5 @@
 // لمّة · عامل الخدمة: يشغّل التطبيق بدون نت، ويستقبل الإشعارات
-const VERSION = 'lamma-v7';
+const VERSION = 'lamma-v8';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
   './js/app.js', './js/calls.js', './js/callui.js', './js/games.js', './js/gamedata.js', './js/sound.js', './js/crypto.js', './js/config.js',

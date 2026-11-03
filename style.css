@@ -948,10 +948,7 @@ body.kb .toast { bottom: 76px; }
 #main[data-tab="settings"] .btn.ghost, #main[data-tab="games"] .btn.ghost { background: var(--cell); }
 
 /* ===== v7: شريط التبويبات أنزل + علاج فراغ iOS 26 تحت ===== */
-:root { --gapfix: 0px; }
-.screen { bottom: auto; height: calc(100% + var(--gapfix)); }
-#chat, .sheet-wrap { height: var(--vvh, calc(100% + var(--gapfix))); }
-.tabbar { bottom: max(8px, calc(var(--safe-b) - 10px - var(--gapfix))); }
+.tabbar { bottom: max(8px, calc(var(--safe-b) - 10px)); }
 .composer, .recbar { padding-bottom: max(10px, calc(var(--safe-b) - 2px)); }
 body.kb .composer, body.kb .recbar { padding-bottom: 8px; }
 .pane { padding-bottom: calc(var(--safe-b) + 96px); }
