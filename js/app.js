@@ -431,7 +431,7 @@ async function start() {
   subscribe();
   presence();
   initCalls({
-    sb, me: S.me, toast, hydrate,
+    sb, me: S.me, toast, hydrate, mediaError,
     member: (id) => S.members.get(id),
     avatar: (id, cls) => avatar(id, cls),
     notify,
@@ -707,6 +707,7 @@ function bindMain() {
     const b = e.target.closest('button');
     if (!b) return;
     S.tab = b.dataset.t;
+    $('#main').dataset.tab = S.tab;
     $$('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
     for (const p of ['chats', 'stories', 'calls', 'games', 'settings']) $('#pane-' + p).classList.toggle('hidden', p !== S.tab);
     $('#pageTitle').textContent = { chats: 'الدردشات', stories: 'القصص', calls: 'المكالمات', games: 'الألعاب', settings: 'الإعدادات' }[S.tab];
@@ -748,6 +749,7 @@ function bindMain() {
     resync();
     markRead();
   });
+  addEventListener('online', () => resync(true));
 }
 
 // ================= التحديث الفوري =================
@@ -792,18 +794,34 @@ function subscribe() {
   });
   on(ch, 'games', '*', async (p) => onGameChange('games', p));
   on(ch, 'game_moves', '*', async (p) => onGameChange('game_moves', p));
-  ch.subscribe((status) => { if (status === 'CHANNEL_ERROR') console.warn('realtime error'); });
+  ch.subscribe((status) => {
+    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') { console.warn('realtime', status); setTimeout(healRealtime, 3000); }
+  });
+  S.ch = ch;
+}
+// بعد ما يرجع الجوال من النوم، الاتصال الفوري أحياناً يكون مقطوع: نرجّعه
+function healRealtime() {
+  const st = S.ch?.state;
+  if (!S.ch || st === 'joined' || st === 'joining') return;
+  if (Date.now() - (S.healT || 0) < 8000) return;
+  S.healT = Date.now();
+  try { sb.removeChannel(S.ch); } catch (e) { /* ignore */ }
+  subscribe();
+  resync(true);
 }
 
 let resyncT = 0;
-async function resync() {
-  if (Date.now() - resyncT < 4000) return;
+async function resync(force) {
+  if (!force && Date.now() - resyncT < 4000) return;
   resyncT = Date.now();
+  healRealtime();
   await loadChats();
   renderList();
   if (S.open) await loadOpenMessages(true);
-  await loadStories();
+  await Promise.all([loadStories(), loadGames().catch(() => {})]);
   renderStories();
+  if (S.tab === 'games') renderGamesPane();
+  badge();
 }
 
 async function onMessage(row) {
@@ -929,7 +947,10 @@ async function openChat(id) {
     }
   }
   const wasOpen = !!S.open;
-  S.open = { id, chat: c, msgs: [], rx: new Map(), reads: new Map(), more: false };
+  if (S.open) cacheOpen();
+  // لو فتحتها قبل، نعرض آخر نسخة على طول (بدون شاشة فاضية) ونحدّث من السيرفر وراها
+  const cached = S.msgCache?.get(id);
+  S.open = cached ? { ...cached, id, chat: c } : { id, chat: c, msgs: [], rx: new Map(), reads: new Map(), more: false };
   S.reply = null;
   $('#replyBox').classList.add('hidden');
   $('#msgInp').value = '';
@@ -938,17 +959,27 @@ async function openChat(id) {
   renderHeader();
   syncComposer();
   $('#msgs').innerHTML = '';
+  delete $('#msgs').dataset.chat;
+  if (cached) renderMsgs(true);
   const scr = $('#chat');
   scr.classList.remove('off');
   if (!wasOpen) history.pushState({ chat: id }, '');
-  await loadOpenMessages();
+  await loadOpenMessages(!!cached);
   c.unread = 0;
   renderList();
   badge();
   markRead();
 }
+function cacheOpen() {
+  const o = S.open;
+  if (!o) return;
+  S.msgCache = S.msgCache || new Map();
+  S.msgCache.set(o.id, { msgs: o.msgs.filter((m) => !m.pending), rx: o.rx, reads: o.reads, roles: o.roles, stars: o.stars, more: o.more });
+  if (S.msgCache.size > 12) S.msgCache.delete(S.msgCache.keys().next().value);
+}
 function closeChat() {
   if (!S.open) return;
+  cacheOpen();
   S.open = null;
   stopVoice();
   $('#chat').classList.add('off');
@@ -1107,19 +1138,50 @@ function renderMsgs(forceBottom) {
   if (!o) return;
   const box = $('#msgs');
   const near = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
-  let html = o.more ? '<button class="btn ghost more" id="moreBtn">رسائل أقدم</button>' : '';
-  if (!o.msgs.length) html += emptyState(o.chat.is_direct ? ICON.chat : ICON.users, 'ابدأ المحادثة', 'الرسائل مشفرة من طرف لطرف');
   const hid = hiddenMsgs();
   const list = hid.size ? o.msgs.filter((m) => !hid.has(m.id)) : o.msgs;
-  list.forEach((m, i) => { html += msgHTML(m, list[i - 1]); });
-  box.innerHTML = html;
+  // نحدّث بس الرسائل اللي تغيّرت (بدل ما نعيد رسم المحادثة كلها) عشان ما تنط الشاشة وما ترمش الصور
+  const want = [];
+  if (o.more) want.push(['__more', '<button class="btn ghost more" id="moreBtn">رسائل أقدم</button>']);
+  if (!list.length) want.push(['__empty', emptyState(o.chat.is_direct ? ICON.chat : ICON.users, 'ابدأ المحادثة', 'الرسائل مشفرة من طرف لطرف')]);
+  list.forEach((m, i) => want.push([String(m.id), msgHTML(m, list[i - 1])]));
+  const old = new Map();
+  for (const el of box.children) if (el.dataset.k) old.set(el.dataset.k, el);
+  if (box.dataset.chat !== o.id) { old.clear(); box.dataset.chat = o.id; }
+  // الرسالة اللي كانت مؤقتة (tmp) وصارت حقيقية: نعيد استخدام صورتها المحمّلة
+  const tpl = document.createElement('template');
+  const nodes = want.map(([k, h]) => {
+    const ex = old.get(k);
+    if (ex && ex._h === h) { old.delete(k); return ex; }
+    tpl.innerHTML = `<div class="mw" data-k="${esc(k)}">${h}</div>`;
+    const el = tpl.content.firstElementChild;
+    el._h = h;
+    if (ex) {
+      $$('img[data-media]', ex).forEach((oi) => {
+        const ni = el.querySelector(`img[data-media="${CSS.escape(oi.dataset.media)}"]`);
+        if (ni && oi.src) { ni.src = oi.src; ni.dataset.ok = '1'; }
+      });
+      old.delete(k);
+    }
+    return el;
+  });
+  const prevTop = box.scrollTop;
+  box.replaceChildren(...nodes);
   hydrate(box);
   if (S.voice) {
     const el = box.querySelector(`[data-voice="${CSS.escape(S.voice.path)}"]`);
     if (el) { S.voice.el = el; el.querySelector('.play').innerHTML = S.voice.audio.paused ? ICON.play : ICON.pause; voiceProgress(); }
   }
   if (forceBottom || near) box.scrollTop = box.scrollHeight;
-  $$('img.pic', box).forEach((img) => img.addEventListener('load', () => { if (forceBottom || near) box.scrollTop = box.scrollHeight; }, { once: true }));
+  else box.scrollTop = prevTop;
+  $$('img.pic:not([data-wired])', box).forEach((img) => {
+    img.dataset.wired = '1';
+    if (img.complete && img.naturalWidth) return;
+    img.addEventListener('load', () => {
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 400;
+      if (forceBottom || atBottom) box.scrollTop = box.scrollHeight;
+    }, { once: true });
+  });
 }
 
 // "حذف عندي": الرسالة تختفي من جوالك بس
@@ -1213,7 +1275,12 @@ function bindChat() {
   const inp = $('#msgInp');
   inp.oninput = () => { autosize(); syncSend(); sendTyping(); };
   inp.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !touch) { e.preventDefault(); sendText(); } };
-  $('#sendBtn').onclick = () => ($('#msgInp').value.trim() ? sendText() : startRec());
+  $('#sendBtn').onclick = () => {
+    if ($('#msgInp').value.trim()) { S.lastSend = Date.now(); return sendText(); }
+    // ضغطة ثانية بالغلط بعد الإرسال ما تبدأ تسجيل صوتي
+    if (Date.now() - (S.lastSend || 0) < 900) return;
+    startRec();
+  };
   $('#attachBtn').onclick = () => $('#fileInp').click();
   $('#fileInp').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) imageSheet(f); };
   $('#replyX').onclick = () => { S.reply = null; $('#replyBox').classList.add('hidden'); };
@@ -1244,6 +1311,18 @@ const RX = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 function msgSheet(id) {
   const o = S.open;
   const m = o.msgs.find((x) => x.id === id);
+  if (m?.failed) {
+    return openSheet(`<p class="ask-t">ما انرسلت هذي الرسالة</p>
+      <button class="act" data-a="retry"><span class="ic">${ICON.send}</span>أعد الإرسال</button>
+      <button class="act red" data-a="drop"><span class="ic">${ICON.trash}</span>احذفها</button>`, (e) => {
+      const a = e.target.closest('[data-a]')?.dataset.a;
+      if (!a) return;
+      closeSheet();
+      o.msgs = o.msgs.filter((x) => x !== m);
+      renderMsgs();
+      if (a === 'retry') sendTo(o.id, m.kind, m.b);
+    });
+  }
   if (!m || m.pending) return;
   const mine = m.sender === S.me;
   const myRx = o.rx.get(id)?.get(S.me);
@@ -1288,9 +1367,7 @@ function msgSheet(id) {
     } else if (a === 'copy') {
       navigator.clipboard?.writeText(m.b.t).then(() => toast('تم النسخ'), () => toast('ما قدرنا ننسخ'));
     } else if (a === 'save') {
-      const url = await loadMedia(m.b.m.p, m.b.m.type);
-      const l = document.createElement('a');
-      l.href = url; l.download = 'lamma-' + Date.now() + '.jpg'; l.click();
+      saveImage(await loadMedia(m.b.m.p, m.b.m.type));
     } else if (a === 'info') {
       readInfoSheet(m);
     } else if (a === 'hide') {
@@ -1353,13 +1430,13 @@ function bindSwipeReply() {
   });
   box.addEventListener('contextmenu', (e) => { if (e.target.closest('.m')) e.preventDefault(); });
   box.addEventListener('scroll', cancelLP, { passive: true });
-  box.addEventListener('pointermove', (e) => {
+  addEventListener('pointermove', (e) => {
     if (!st) return;
     const dx = e.clientX - st.x, dy = e.clientY - st.y;
     if (lp && Math.hypot(dx, dy) > 8) cancelLP();
     if (!st.on) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { st = null; return; }
-      if (Math.abs(dx) < 12 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+      if (Math.abs(dy) > 8 && Math.abs(dy) > Math.abs(dx) * 0.7) { st = null; return; }
+      if (Math.abs(dx) < 18 || Math.abs(dx) < Math.abs(dy) * 2) return;
       st.on = true;
       st.m.classList.add('swiping');
     }
@@ -1383,8 +1460,8 @@ function bindSwipeReply() {
     S.suppressClick = Date.now();
     if (Math.abs(s.dx) >= 60) startReply(s.m.dataset.id);
   };
-  box.addEventListener('pointerup', end);
-  box.addEventListener('pointercancel', end);
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
 }
 async function jumpTo(id) {
   const o = S.open;
@@ -1483,6 +1560,19 @@ function imageSheet(file) {
     }
   };
 }
+// حفظ الصورة: في الآيفون تطلع قائمة المشاركة وفيها «حفظ الصورة»
+async function saveImage(url) {
+  try {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], 'lamma-' + Date.now() + '.jpg', { type: blob.type || 'image/jpeg' });
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file] }); return; }
+    const l = document.createElement('a');
+    l.href = URL.createObjectURL(file); l.download = file.name; l.click();
+    setTimeout(() => URL.revokeObjectURL(l.href), 5000);
+  } catch (e) {
+    if (e?.name !== 'AbortError') toast('افتح الصورة واضغط عليها مطوّل واختر «حفظ في الصور»', 3500);
+  }
+}
 function viewImage(src, msgId) {
   const v = $('#viewer');
   const m = msgId ? S.open?.msgs.find((x) => x.id === msgId && !x.pending) : null;
@@ -1496,11 +1586,7 @@ function viewImage(src, msgId) {
     if (!a) return;
     if (a === 'x') return history.back();
     if (!m) return;
-    if (a === 'save') {
-      const l = document.createElement('a');
-      l.href = src; l.download = 'lamma-' + Date.now() + '.jpg'; l.click();
-      return toast('اضغط مطوّل على الصورة واختر «حفظ في الصور» إذا ما انحفظت', 3500);
-    }
+    if (a === 'save') return saveImage(src);
     history.back();
     await new Promise((r) => setTimeout(r, 180));
     if (a === 'reply') startReply(m.id);
@@ -1542,8 +1628,34 @@ async function startRec() {
       if (s > 300) stopRec(true);
     }, 250);
   } catch (e) {
-    toast('اسمح للتطبيق باستخدام المايك');
+    try { rec?.stream?.getTracks().forEach((t) => t.stop()); } catch (x) { /* ignore */ }
+    rec = null;
+    mediaError(e, 'mic');
   }
+}
+// لما يرفض الجوال المايك أو الكاميرا: نشرح السبب بالضبط وكيف تحله
+function mediaError(e, what) {
+  const name = e?.name || '';
+  const thing = what === 'cam' ? 'الكاميرا والمايك' : 'المايك';
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return toast(`ما لقينا ${thing} في جهازك`);
+  if (name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError') return toast(`${thing} مشغول في تطبيق ثاني (مكالمة أو تسجيل). سكّره وجرّب`, 4500);
+  if (name !== 'NotAllowedError' && name !== 'PermissionDeniedError' && name !== 'SecurityError') return toast(`ما اشتغل ${thing} (${name || e?.message || 'خطأ'})`, 4500);
+  openSheet(`<h3>اسمح بـ${thing}</h3><div class="form perm-help">
+    <p>الجوال مانع لمّة من ${thing}. هذا يتعدل من إعدادات الجوال، مو من التطبيق:</p>
+    ${isIOS ? `<ol>
+      <li>افتح <b>الإعدادات</b> في الآيفون</li>
+      <li>اختر <b>التطبيقات</b> ثم <b>Safari</b> (لمّة تتبع Safari لأنها مضافة للشاشة الرئيسية)</li>
+      <li>نزّل تحت لـ <b>الميكروفون</b>${what === 'cam' ? ' و<b>الكاميرا</b>' : ''} واختر <b>اسأل</b> أو <b>سماح</b></li>
+      <li>إذا ما تغيّر شي: <b>الإعدادات ← مدة استخدام الجهاز ← قيود المحتوى والخصوصية ← الميكروفون</b> وخلها «سماح»</li>
+      <li>سكّر لمّة بالكامل (اسحبها من قائمة التطبيقات) وافتحها من جديد</li>
+    </ol>` : `<ol>
+      <li>اضغط مطوّل على أيقونة لمّة ← <b>معلومات التطبيق</b> ← <b>الأذونات</b></li>
+      <li>فعّل <b>الميكروفون</b>${what === 'cam' ? ' و<b>الكاميرا</b>' : ''}</li>
+      <li>أو من Chrome: اضغط القفل جنب الرابط ← <b>الأذونات</b> ← سماح</li>
+    </ol>`}
+    <button class="btn" id="permOk">فهمت</button>
+  </div>`);
+  $('#permOk').onclick = closeSheet;
 }
 function stopRec(send) {
   if (!rec) return;
@@ -2023,6 +2135,7 @@ async function clearChat(chatId) {
   if (!(await ask('تمسح كل الرسائل من هذي المحادثة عندك؟ أهلك بتبقى عندهم.', 'مسح محتوى الدردشة', true))) return;
   const { error } = await sb.from('chat_members').update({ cleared_at: new Date().toISOString() }).eq('chat_id', chatId).eq('user_id', S.me);
   if (error) return toast('ما انمسحت');
+  S.msgCache?.delete(chatId);
   await loadChats();
   renderList();
   if (S.open?.id === chatId) { S.open.chat = chatOf(chatId) || S.open.chat; await loadOpenMessages(); }
@@ -2621,7 +2734,7 @@ function renderSettings() {
       <button class="set-row" data-a="lock"><span class="ic tile" style="--c:#6B7280">${ICON.lock}</span><span>عن التشفير</span><i class="chev">${ICON.chevron}</i></button>
       <button class="set-row" data-a="out" style="color:var(--danger)"><span class="ic tile" style="--c:#D93025">${ICON.logout}</span><span>تسجيل خروج من هذا الجهاز</span></button>
     </div>
-    <p class="lock-note">لمّة · نسخة 1.1 · مشفّر من طرف لطرف</p>`;
+    <p class="lock-note">لمّة · نسخة 1.2 · مشفّر من طرف لطرف</p>`;
   hydrate(pane);
   $('#avFile').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) changeAvatar(f); };
   pane.onclick = async (e) => {

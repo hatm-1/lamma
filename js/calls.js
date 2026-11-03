@@ -60,10 +60,18 @@ function newPC() {
 }
 
 async function getMedia(video) {
-  return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true },
-    video: video ? { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 1280 } } : false,
-  });
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: video ? { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 1280 } } : false,
+    });
+  } catch (e) {
+    // بعض الأجهزة ترفض الإعدادات الدقيقة، نجرب بالإعدادات البسيطة
+    if (e && (e.name === 'OverconstrainedError' || e.name === 'TypeError' || e.name === 'NotReadableError')) {
+      return navigator.mediaDevices.getUserMedia({ audio: true, video: !!video });
+    }
+    throw e;
+  }
 }
 
 // ---------- المتصل ----------
@@ -75,8 +83,8 @@ export async function startCall(other, chatId, video) {
   try {
     cur.stream = await getMedia(video);
   } catch (e) {
-    ctx.toast('اسمح للتطبيق باستخدام ' + (video ? 'الكاميرا والمايك' : 'المايك'));
-    return cleanup();
+    cleanup();
+    return ctx.mediaError ? ctx.mediaError(e, video ? 'cam' : 'mic') : ctx.toast('اسمح للتطبيق باستخدام المايك');
   }
   if (!cur) return;
   attachLocal();
@@ -134,9 +142,10 @@ async function accept() {
   try {
     cur.stream = await getMedia(cur.video);
   } catch (e) {
-    ctx.toast('اسمح للتطبيق باستخدام المايك' + (cur.video ? ' والكاميرا' : ''));
+    const v = cur.video;
     send(cur.other, { t: 'end', id: cur.id, why: 'declined' });
-    return cleanup();
+    cleanup();
+    return ctx.mediaError ? ctx.mediaError(e, v ? 'cam' : 'mic') : ctx.toast('اسمح للتطبيق باستخدام المايك');
   }
   attachLocal();
   const pc = (cur.pc = newPC());

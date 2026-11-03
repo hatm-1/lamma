@@ -209,9 +209,12 @@ export async function newGameSheet(kind, preChat) {
     <div class="form" style="margin-top:12px"><button class="btn" id="gwGo">ابدأ وأرسلها للقروب</button></div>`);
   $('#gwRnd')?.addEventListener('click', () => { $('#gwQ').value = WHO_QUESTIONS[Math.floor(Math.random() * WHO_QUESTIONS.length)]; });
   $('#gwChips')?.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) $('#gwT').value = b.textContent; });
-  $('#gwGo').onclick = async () => {
+  $('#gwGo').onclick = async (ev) => {
     const chatId = $('#sheet input[name=gchat]:checked')?.value;
     if (!chatId) return C.toast('اختر قروب');
+    if (ev.currentTarget.disabled) return;
+    ev.currentTarget.disabled = true;
+    setTimeout(() => { const b = $('#gwGo'); if (b) b.disabled = false; }, 2500);
     let state = {};
     if (kind === 'who') {
       const q = $('#gwQ').value.trim();
@@ -738,7 +741,9 @@ function finishGame(g) {
   g.status = 'done';
 }
 async function acceptInvite(g, open) {
-  if (g.state.to !== me()) return;
+  if (g.state.to !== me() || G.accepting === g.id) return;
+  G.accepting = g.id;
+  setTimeout(() => { if (G.accepting === g.id) G.accepting = null; }, 3000);
   const ok = await move(g, 'acc', {}, true);
   if (!ok) return;
   sfx('ding');
@@ -753,7 +758,9 @@ async function declineInvite(g) {
 }
 // جولة ثانية: نرسل طلب للخصم، ويبدأ اللي بدأ ثاني المرة اللي فاتت
 async function askRematch(g) {
-  if (rematchOf(g)) return;
+  if (rematchOf(g) || G.rematching) return;
+  G.rematching = true;
+  setTimeout(() => { G.rematching = false; }, 4000);
   const other = g.state.x === me() ? g.state.o : g.state.x;
   const sc = seriesOf(g);
   const r = await createGame(g.kind, g.chat_id, { x: g.state.o, o: g.state.x, to: other, prev: g.id, sc }, 'جولة ثانية', true);
