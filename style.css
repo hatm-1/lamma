@@ -921,3 +921,28 @@ body.kb .sheet { padding-bottom: 12px; max-height: calc(var(--vvh, 100dvh) - 20p
 .vs { font-size: 13px; color: var(--muted); font-weight: 700; }
 .g-status.end { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) { .dots i { animation: none; } }
+
+/* ===== v6: تحسينات الشكل ===== */
+/* غلاف كل رسالة ما يأثر على الترتيب */
+.mw { display: contents; }
+/* التنبيهات تطلع تحت فوق شريط التبويبات، ما تغطي العنوان */
+.toast { top: auto; bottom: calc(var(--safe-b) + 104px); transform: translate(-50%, 16px); max-width: min(88vw, 420px); line-height: 1.45;
+  background: color-mix(in srgb, var(--ink) 92%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
+.toast.show { transform: translate(-50%, 0); }
+body.kb .toast { bottom: 76px; }
+#chat:not(.off) ~ .toast, body.has-call .toast { bottom: calc(var(--safe-b) + 84px); }
+/* معاينة الألوان */
+.color-preview .them, .color-preview .me { max-width: 78%; }
+.color-preview .bub { max-width: none; }
+/* صندوق شرح الصلاحيات */
+.perm-help ol { margin: 0; padding-inline-start: 22px; display: flex; flex-direction: column; gap: 8px; line-height: 1.6; }
+.perm-help p { margin: 0; }
+/* الرسالة اللي ما انرسلت */
+.tk-fail { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--danger, #E5484D); color: #fff; font-size: 11px; font-weight: 800; }
+/* تمرير أنعم في المحادثة */
+.msgs { scroll-behavior: auto; -webkit-overflow-scrolling: touch; overflow-anchor: auto; }
+.msgs .m, .msgs .day, .msgs .sys { overflow-anchor: none; }
+/* الإعدادات والألعاب على خلفية رمادية خفيفة (في الفاتح) عشان البطاقات البيضا تبان */
+#main[data-tab="settings"], #main[data-tab="games"] { background: var(--group-bg); }
+#main[data-tab="settings"] .lg-head, #main[data-tab="games"] .lg-head { background: transparent; }
+#main[data-tab="settings"] .btn.ghost, #main[data-tab="games"] .btn.ghost { background: var(--cell); }
