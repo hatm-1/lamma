@@ -1,8 +1,8 @@
 // لمّة · عامل الخدمة: يشغّل التطبيق بدون نت، ويستقبل الإشعارات
-const VERSION = 'lamma-v8';
+const VERSION = 'lamma-v19';
 const SHELL = [
   './', './index.html', './style.css', './manifest.webmanifest',
-  './js/app.js', './js/calls.js', './js/callui.js', './js/games.js', './js/gamedata.js', './js/sound.js', './js/crypto.js', './js/config.js',
+  './js/app.js', './js/calls.js', './js/callui.js', './js/games.js', './js/games2.js', './js/baloot.js', './js/domino.js', './js/gamedata.js', './js/voice.js', './js/million.js', './js/sound.js', './js/crypto.js', './js/config.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/badge-96.png',
 ];
 
