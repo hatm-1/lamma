@@ -19,22 +19,25 @@ const cell = (a, icon, label, cls = '') => `<div class="cbtn"><button class="${c
 
 export function callMarkup(cur, ctx, status) {
   const ring = cur.state === 'ringing';
-  const showLocal = cur.video && !ring;
+  // كاميرتي شغّالة؟ (في المكالمة الصوتية تقدر تشغّلها وتتحول فيديو)
+  const myCam = ring ? false : (cur.stream ? cur.stream.getVideoTracks().length > 0 : !!cur.video);
+  const anyVideo = cur.video || cur.remoteVideo || myCam;
+  const showLocal = myCam && !ring;
   let panel;
   if (ring) {
     panel = cell('decline', IC.hang, 'رفض', 'end') + cell('accept', IC.accept, 'رد', 'accept');
   } else {
     const muted = cur.muted, camOff = cur.camOff;
-    panel = (cur.video ? cell('cam', camOff ? IC.camOff : IC.cam, 'الكاميرا', camOff ? 'off' : '') : cell('chat', IC.chat, 'الدردشة'))
+    panel = (myCam ? cell('cam', camOff ? IC.camOff : IC.cam, 'الكاميرا', camOff ? 'off' : '') : cell('tovideo', IC.cam, 'فيديو'))
       + cell('speaker', IC.speaker, 'سماعة', cur.speaker ? 'off' : '')
       + cell('mute', muted ? IC.micOff : IC.mic, 'كتم', muted ? 'off' : '')
       + cell('more', IC.more, 'المزيد')
-      + (cur.video ? cell('flip', IC.flip, 'قلب الكاميرا') : cell('min', IC.minimize, 'تصغير'))
+      + (myCam ? cell('flip', IC.flip, 'قلب الكاميرا') : cell('min', IC.minimize, 'تصغير'))
       + cell('hang', IC.hang, 'إنهاء', 'end');
   }
   return `
     <div class="call-bg"></div>
-    <video class="remote${cur.video ? '' : ' audio'}" playsinline autoplay></video>
+    <video class="remote${anyVideo ? '' : ' audio'}" playsinline autoplay></video>
     ${showLocal ? '<video class="local" playsinline autoplay muted></video>' : ''}
     <div class="call-top">
       ${ring ? '<span class="cspace"></span>' : `<button class="cglass" data-a="min" aria-label="تصغير المكالمة">${IC.minimize}</button>`}
@@ -42,7 +45,8 @@ export function callMarkup(cur, ctx, status) {
       <span class="cspace"></span>
     </div>
     <div class="call-av">${ctx.avatar(cur.other, 'xl' + (ring || cur.state === 'calling' ? ' pulse' : ''))}</div>
-    <div class="call-panel${ring ? ' ring' : ''}">${panel}</div>`;
+    <div class="call-panel${ring ? ' ring' : ''}">${panel}</div>
+    ${anyVideo && !ring ? '<p class="call-hint">اضغط على الشاشة لإخفاء الأزرار</p>' : ''}`;
 }
 
 export function setPill(text, onTap) {

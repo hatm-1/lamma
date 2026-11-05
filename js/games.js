@@ -1,8 +1,10 @@
 // لمّة · الألعاب الجماعية
 import { WHO_QUESTIONS, WHEEL_TITLES, QUIZ, WORDS, normWord, scoreGuess } from './gamedata.js';
+import * as VC from './voice.js';
+import { initExt, EXT, EXT_INFO, EXT_ICON, extRender, extBody, extAfter, extOver, extMyTurn, extRow, extTitle, extClick, extNewSheet } from './games2.js';
 
 let C;            // أدوات من التطبيق
-const G = { list: [], moves: new Map(), open: null, word: null, quizRun: null, wordInput: '', wheelShown: 0, spinning: false, quizStarts: {}, seen: new Map(), celebrated: new Set() };
+const G = { animated: new Map(), list: [], moves: new Map(), open: null, word: null, quizRun: null, wordInput: '', wheelShown: 0, spinning: false, quizStarts: {}, seen: new Map(), celebrated: new Set() };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const svg = (d, cls = '') => `<svg viewBox="0 0 24 24" class="${cls}" aria-hidden="true">${d}</svg>`;
@@ -25,21 +27,43 @@ export const GINFO = {
   word: { n: 'كلمة اليوم', d: 'خمّن الكلمة في 6 محاولات', c: '#0F8B8D' },
 };
 const TURN = new Set(['xo', 'c4']);
+Object.assign(GINFO, EXT_INFO);
+Object.assign(GICON, EXT_ICON);
 const esc = (s) => C.esc(s);
 const me = () => C.me();
 
-export function initGames(ctx) { C = ctx; }
+export function initGames(ctx) {
+  C = ctx;
+  VC.initVoice({ sb: ctx.sb, me: ctx.me, toast: ctx.toast, mediaError: ctx.mediaError, inCall: ctx.inCall, onChange: () => { if (G.open && !G.spinning) renderGame(); } });
+  initExt({ C: () => C, G, movesOf: (id) => movesOf(id), renderGame: () => renderGame(), shell, onGameClick: (e) => onGameClick(e), createGame, seeded, shuffle });
+}
 const sfx = (n) => C.sfx?.(n);
-const buzz = (p) => { try { navigator.vibrate?.(p); } catch (e) { /* ignore */ } };
+// كم صار من وقت ما شفنا آخر حركة (عشان الحركة تكمل حتى لو انعاد رسم الشاشة)
+function freshAge(g, n) {
+  if (!G.freshAt) G.freshAt = new Map();
+  const prev = G.animated.get(g.id);
+  if (prev !== n) { G.animated.set(g.id, n); if (prev !== undefined) G.freshAt.set(g.id, Date.now()); else G.freshAt.delete(g.id); }
+  const t = G.freshAt.get(g.id);
+  return t ? Date.now() - t : 1e9;
+}
+const buzz = (p) => C.haptic?.(Array.isArray(p) ? 'strong' : 'light');
 export const gameIsOpen = () => !$('#game').classList.contains('off');
 export function closeGame() {
   $('#game').classList.add('off');
   clearInterval(G.quizTimer);
+  clearInterval(G.mTimer); clearInterval(G.extTick); clearTimeout(G.botT); clearTimeout(G.extRerender); clearTimeout(G.staleT); clearInterval(G.turnTick); clearTimeout(G.extRerender2);
+  G.mRun = null; G.dPick = null; G.drawing = false;
+  delete $('#game').dataset.drawKey; delete $('#game').dataset.hKey;
+  const was = G.open;
   G.open = null;
   G.quizRun = null;
+  // لو كنت في صوت اللعبة، يكمل شغال وتطلع لك شارة ترجع منها
+  if (VC.inVoice()) C.voicePill?.('صوت اللعبة شغال · اضغط ترجع', () => was && openGame(was.id));
+  else VC.unwatch();
 }
 export function gameTitle(g) {
   if (!g) return '';
+  if (EXT.has(g.kind)) return extTitle(g);
   if (g.kind === 'who') return g.state?.q || GINFO.who.n;
   if (g.kind === 'wheel') return g.state?.t || GINFO.wheel.n;
   return GINFO[g.kind]?.n || 'لعبة';
@@ -114,8 +138,8 @@ export async function onGameChange(table, p) {
 
 // دورك؟ (عدد الألعاب اللي تنتظرك)
 export function myTurns() {
-  return G.list.filter((g) => TURN.has(g.kind) && g.status === 'open' && !declined(g) && !winnerOf(g)
-    && (pendingInvite(g) ? g.state.to === me() : turnOf(g) === me())).length;
+  return G.list.filter((g) => (EXT.has(g.kind) ? g.status === 'open' && extMyTurn(g) : TURN.has(g.kind) && g.status === 'open' && !declined(g) && !winnerOf(g)
+    && (pendingInvite(g) ? g.state.to === me() : turnOf(g) === me()))).length;
 }
 
 // ---------- تبويب الألعاب ----------
@@ -129,7 +153,8 @@ export function renderGamesPane() {
   const solved = mine.some((m) => m.data?.w === target);
   const wordSub = solved ? `حلّيتها في ${mine.length} ${mine.length === 1 ? 'محاولة' : 'محاولات'}` : mine.length >= 6 ? 'ما حلّيتها اليوم، بكرة كلمة جديدة' : mine.length ? `جرّبت ${mine.length} من 6` : 'كلمة جديدة كل يوم للعائلة كلها';
   const played = wg ? new Set(movesOf(wg.id).map((m) => m.user_id)).size : 0;
-  const active = G.list.filter((g) => g.kind !== 'word' && C.chatOf(g.chat_id));
+  const since3 = Date.now() - 3 * 864e5;
+  const active = G.list.filter((g) => g.kind !== 'word' && C.chatOf(g.chat_id) && Date.parse(g.created_at) >= since3);
   pane.innerHTML = `
     <button class="word-card" data-word="1">
       <span class="wc-ic">${GICON.word}</span>
@@ -139,7 +164,7 @@ export function renderGamesPane() {
     </button>
     <p class="section-t">العب مع العائلة</p>
     <div class="game-grid">
-      ${['who', 'wheel', 'quiz', 'xo', 'c4'].map((k) => `<button class="gtile" data-new="${k}" style="--gc:${GINFO[k].c}"><span class="gt-ic">${GICON[k]}</span><b>${GINFO[k].n}</b><small>${GINFO[k].d}</small></button>`).join('')}
+      ${['baloot', 'domino', 'draw', 'huroof', 'million', 'who', 'wheel', 'quiz', 'xo', 'c4'].map((k) => `<button class="gtile" data-new="${k}" style="--gc:${GINFO[k].c}"><span class="gt-ic">${GICON[k]}</span><b>${GINFO[k].n}</b><small>${GINFO[k].d}</small></button>`).join('')}
     </div>
     <p class="section-t">ألعاب آخر 3 أيام</p>
     ${active.length ? `<ul class="list">${active.map(gameRow).join('')}</ul>` : `<div class="empty"><span class="empty-ic">${GICON.pad}</span><b>ما فيه ألعاب جارية</b><small>اختر لعبة فوق وابدأ مع أهلك</small></div>`}`;
@@ -156,7 +181,11 @@ function gameRow(g) {
   const c = C.chatOf(g.chat_id);
   let sub = c ? C.chatName(c) : '';
   let flag = '';
-  if (TURN.has(g.kind)) {
+  if (EXT.has(g.kind)) {
+    const x = extRow(g);
+    if (x.sub) sub += (sub ? ' · ' : '') + x.sub;
+    flag = x.flag;
+  } else if (TURN.has(g.kind)) {
     const w = winnerOf(g);
     if (declined(g)) sub += ' · ' + (g.state.to === me() ? 'اعتذرت' : 'اعتذر ' + C.short(g.state.to));
     else if (pendingInvite(g)) {
@@ -174,12 +203,54 @@ function gameRow(g) {
     <div class="row-side"><time>${C.listTime(g.created_at)}</time>${flag}</div></div></li>`;
 }
 
+// ---------- ألعاب المحادثة (زر في أعلى المحادثة) ----------
+export function chatGameFlag(chatId) {
+  return G.list.some((g) => g.chat_id === chatId && g.status === 'open' && (EXT.has(g.kind) ? extMyTurn(g) : TURN.has(g.kind) && !declined(g) && !winnerOf(g)
+    && (pendingInvite(g) ? g.state.to === me() : turnOf(g) === me())));
+}
+export async function chatGamesSheet(chatId, other) {
+  // نجيب كل ألعاب المحادثة (مو بس آخر 3 أيام)
+  const { data } = await C.sb.from('games').select('*').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(40);
+  const games = data || [];
+  const ids = games.map((g) => g.id).filter((id) => !G.moves.has(id));
+  if (ids.length) {
+    const { data: mv } = await C.sb.from('game_moves').select('*').in('game_id', ids);
+    ids.forEach((id) => G.moves.set(id, []));
+    for (const m of mv || []) G.moves.get(m.game_id)?.push(m);
+  }
+  games.forEach((g) => { if (!G.list.some((x) => x.id === g.id)) G.list.push(g); });
+  const live = [], done = [];
+  for (const g of games) {
+    const over = EXT.has(g.kind) ? extOver(g) : TURN.has(g.kind) ? (!!winnerOf(g) || declined(g)) : g.status === 'done';
+    (over ? done : live).push(g);
+  }
+  const kinds = other ? ['xo', 'c4', 'domino', 'million'] : ['baloot', 'domino', 'draw', 'huroof', 'million', 'who', 'wheel', 'quiz', 'xo', 'c4'];
+  const newBtns = `<div class="cg-new">${kinds.map((k) => `<button data-new="${k}" style="--gc:${GINFO[k].c}"><span>${GICON[k]}</span>${GINFO[k].n}</button>`).join('')}</div>`;
+  const list = (arr) => `<ul class="list">${arr.map(gameRow).join('')}</ul>`;
+  C.openSheet(`<h3>ألعاب هذي المحادثة</h3>
+    <p class="section-t">لعبة جديدة</p>${newBtns}
+    ${live.length ? `<p class="section-t">جارية (${live.length})</p>${list(live)}` : ''}
+    ${done.length ? `<p class="section-t">انتهت (${done.length}) · تقدر تشوفها</p>${list(done)}` : ''}
+    ${!games.length ? '<p class="empty">ما لعبتوا هنا للحين. اختر لعبة فوق</p>' : ''}`, (e) => {
+    const n = e.target.closest('[data-new]')?.dataset.new;
+    if (n) {
+      C.closeSheet();
+      if (other && TURN.has(n)) return createGame(n, chatId, { x: me(), o: other, to: other }, `تحدي ${GINFO[n].n}`);
+      return setTimeout(() => newGameSheet(n, chatId), 250);
+    }
+    const id = e.target.closest('[data-game]')?.dataset.game;
+    if (id) { C.closeSheet(); setTimeout(() => openGame(id), 220); }
+  });
+  C.hydrate(document.getElementById('sheet'));
+}
+
 // ---------- لعبة جديدة ----------
 function groupOptions(pre) {
   const groups = C.chats().filter((c) => !c.is_direct);
   return groups.map((c, i) => `<label class="check">${C.chatAvatar(c, 'sm')}<span style="flex:1">${esc(C.chatName(c))}</span><input type="radio" name="gchat" value="${c.id}" ${(pre ? c.id === pre : i === 0) ? 'checked' : ''}></label>`).join('');
 }
 export async function newGameSheet(kind, preChat) {
+  if (EXT.has(kind)) return extNewSheet(kind, preChat);
   const info = GINFO[kind];
   if (kind === 'xo' || kind === 'c4') {
     const rows = C.memberRows();
@@ -232,8 +303,17 @@ export async function newGameSheet(kind, preChat) {
       if (items.length < 2) return C.toast('تحتاج خيارين على الأقل');
       state = { t, items };
     } else if (kind === 'quiz') {
+      // نختار أسئلة ما طلعت في المسابقات اللي قبل (لين تخلص كلها، بعدها نبدأ من جديد)
       const rnd = seeded(crypto.randomUUID());
-      state = { qs: shuffle(QUIZ.map((_, i) => i), rnd).slice(0, 10) };
+      let used = [];
+      try { used = JSON.parse(localStorage.getItem('lamma-quiz-used') || '[]'); } catch (e) { /* ignore */ }
+      G.list.filter((x) => x.kind === 'quiz').forEach((x) => used.push(...(x.state?.qs || [])));
+      const usedSet = new Set(used);
+      let pool = shuffle(QUIZ.map((_, i) => i).filter((i) => !usedSet.has(i)), rnd);
+      if (pool.length < 10) { used = []; pool = shuffle(QUIZ.map((_, i) => i), rnd); }
+      const qs = pool.slice(0, 10);
+      try { localStorage.setItem('lamma-quiz-used', JSON.stringify([...new Set([...used, ...qs])])); } catch (e) { /* ignore */ }
+      state = { qs };
     }
     C.closeSheet();
     createGame(kind, chatId, state);
@@ -265,11 +345,18 @@ export async function openGame(id) {
   G.moves.set(id, mv || []);
   if (g.kind === 'wheel') G.wheelShown = spins(g).length;
   if (g.kind === 'quiz') G.quizRun = null;
-  if (g.kind === 'who' || g.kind === 'wheel' || g.kind === 'quiz') {
+  if (g.kind === 'million') { G.mRun = null; clearInterval(G.mTimer); }
+  clearInterval(G.extTick);
+  if (g.kind === 'draw' || g.kind === 'huroof') G.extTick = setInterval(() => { if (G.open?.id === id) renderGame(); }, 1000);
+  if (g.kind === 'who' || g.kind === 'wheel' || g.kind === 'quiz' || g.kind === 'huroof' || g.kind === 'draw') {
     const { data: cm } = await C.sb.from('chat_members').select('user_id').eq('chat_id', g.chat_id);
     G.chatMembers = (cm || []).map((r) => r.user_id);
   }
   G.open = g;
+  G.openAt = Date.now();
+  C.voicePill?.(null);
+  if (g.kind === 'baloot' || g.kind === 'domino') VC.watchVoice(g.id);
+  if (TURN.has(g.kind)) G.animated.set(g.id, turnMoves(g.id).length);
   if (TURN.has(g.kind) && winnerOf(g)) G.celebrated.add(g.id);
   if (g.kind === 'word' && wordState(g, me()).done) G.celebrated.add(g.id);
   const el = $('#game');
@@ -302,6 +389,17 @@ function renderGame(first) {
   const el = $('#game');
   const c = C.chatOf(g.chat_id);
   const sub = c ? C.chatName(c) : '';
+  if (EXT.has(g.kind)) {
+    if (!extRender(g, el, first)) {
+      const scroll0 = el.scrollTop;
+      el.innerHTML = shell(GINFO[g.kind].n, sub, extBody(g));
+      if (!first) el.scrollTop = scroll0;
+      el.onclick = (e) => onGameClick(e);
+    }
+    C.hydrate(el);
+    extAfter(g);
+    return;
+  }
   const render = { who: renderWho, wheel: renderWheel, quiz: renderQuiz, xo: renderXO, c4: renderC4, word: renderWord }[g.kind];
   const scroll = el.scrollTop;
   el.innerHTML = shell(GINFO[g.kind].n, g.kind === 'word' ? 'للعائلة كلها · ' + today() : sub, render(g));
@@ -338,6 +436,7 @@ async function onGameClick(e) {
   const a = e.target.closest('[data-a]')?.dataset.a;
   if (a === 'back') return history.back();
   if (a === 'chat') { history.back(); setTimeout(() => C.openChat(g.chat_id), 250); return; }
+  if (EXT.has(g.kind)) return extClick(g, e, a);
   if (g.kind === 'who') {
     const v = e.target.closest('[data-vote]')?.dataset.vote;
     if (v) return move(g, 'v', { u: v }, true);
@@ -714,7 +813,10 @@ function renderXO(g) {
   const w = xoWin(b);
   const last = mv.length ? mv[mv.length - 1].data.i : -1;
   const lock = w || pendingInvite(g) || declined(g) || resignedBy(g);
-  return turnHeader(g) + `<div class="xo${pendingInvite(g) || declined(g) ? ' dim' : ''}">${b.map((s, i) => `<button data-cell="${i}" class="${s || ''}${w?.line?.includes(i) ? ' wl' : ''}${i === last ? ' last' : ''}" ${s || lock ? 'disabled' : ''} aria-label="خانة ${i + 1}">${s === 'x' ? '<i class="mx"></i>' : s === 'o' ? '<i class="mo"></i>' : ''}</button>`).join('')}</div>` + turnFooter(g);
+  // نحرّك القطعة الجديدة مرة وحدة بس (مو كل ما تنرسم اللوحة)
+  const fa = freshAge(g, mv.length);
+  const fresh = fa < 600;
+  return turnHeader(g) + `<div class="xo${pendingInvite(g) || declined(g) ? ' dim' : ''}">${b.map((s, i) => `<button data-cell="${i}" class="${s || ''}${w?.line?.includes(i) ? ' wl' : ''}${i === last ? ' last' + (fresh ? ' anim' : '') : ''}" ${i === last && fresh ? `style="--ad:${-fa}ms"` : ''} ${s || lock ? 'disabled' : ''} aria-label="خانة ${i + 1}">${s === 'x' ? '<i class="mx"></i>' : s === 'o' ? '<i class="mo"></i>' : ''}</button>`).join('')}</div>` + turnFooter(g);
 }
 function renderC4(g) {
   const mv = turnMoves(g.id);
@@ -724,7 +826,9 @@ function renderC4(g) {
   let lastCell = '';
   if (mv.length) { const c = mv[mv.length - 1].data.c; for (let r = 0; r < 6; r++) if (b[r][c]) { lastCell = r + ':' + c; break; } }
   const lock = w || pendingInvite(g) || declined(g) || resignedBy(g);
-  return turnHeader(g) + `<div class="c4${pendingInvite(g) || declined(g) ? ' dim' : ''}">${[0, 1, 2, 3, 4, 5, 6].map((c) => `<button class="col" data-col="${c}" ${b[0][c] || lock ? 'disabled' : ''} aria-label="عمود ${c + 1}">${b.map((row, r) => `<i class="${row[c] || ''}${wset.has(r + ':' + c) ? ' wl' : ''}${lastCell === r + ':' + c ? ' drop' : ''}" style="--r:${r}"></i>`).join('')}</button>`).join('')}</div>` + turnFooter(g);
+  const fa = freshAge(g, mv.length);
+  const fresh = fa < 900;
+  return turnHeader(g) + `<div class="c4${pendingInvite(g) || declined(g) ? ' dim' : ''}">${[0, 1, 2, 3, 4, 5, 6].map((c) => `<button class="col" data-col="${c}" ${b[0][c] || lock ? 'disabled' : ''} aria-label="عمود ${c + 1}">${b.map((row, r) => `<i class="${row[c] || ''}${wset.has(r + ':' + c) ? ' wl' : ''}${lastCell === r + ':' + c ? (fresh ? ' drop' : ' lastp') : ''}" style="--r:${r}${lastCell === r + ':' + c && fresh ? `;animation-delay:${-fa}ms` : ''}"></i>`).join('')}</button>`).join('')}</div>` + turnFooter(g);
 }
 async function playTurn(g, data) {
   if (winnerOf(g) || declined(g)) return;
@@ -733,8 +837,10 @@ async function playTurn(g, data) {
   const n = turnMoves(g.id).length;
   const ok = await move(g, 'm' + n, data, false);
   if (!ok) return;
+  const other = g.state.x === me() ? g.state.o : g.state.x;
   if (winnerOf(g)) finishGame(g);
-  else C.notify(g.chat_id, 'turn', g.state.x === me() ? g.state.o : g.state.x);
+  // «دورك» يوصل بس إذا خصمك طالع من التطبيق
+  else if (!C.isHere?.(other)) C.notify(g.chat_id, 'turn', other);
 }
 function finishGame(g) {
   C.sb.from('games').update({ status: 'done' }).eq('id', g.id).then(() => {});
@@ -747,7 +853,7 @@ async function acceptInvite(g, open) {
   const ok = await move(g, 'acc', {}, true);
   if (!ok) return;
   sfx('ding');
-  C.notify(g.chat_id, 'accept', g.created_by);
+  if (!C.isHere?.(g.created_by)) C.notify(g.chat_id, 'accept', g.created_by);
   if (open || G.open?.id !== g.id) openGame(g.id);
 }
 async function declineInvite(g) {

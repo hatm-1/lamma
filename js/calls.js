@@ -41,7 +41,13 @@ function newPC() {
   const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
   pc.ontrack = (e) => {
     const v = el().querySelector('video.remote');
-    if (v && v.srcObject !== e.streams[0]) { v.srcObject = e.streams[0]; v.play().catch(() => {}); }
+    if (v && e.streams[0] && v.srcObject !== e.streams[0]) { v.srcObject = e.streams[0]; v.play().catch(() => {}); }
+    // الطرف الثاني شغّل كاميرته
+    if (e.track.kind === 'video' && cur && !cur.remoteVideo) {
+      cur.remoteVideo = true;
+      e.track.onunmute = () => { if (cur) render(); };
+      render();
+    }
   };
   pc.onconnectionstatechange = () => {
     if (!cur) return;
@@ -50,6 +56,8 @@ function newPC() {
       stopTone();
       cur.timer = setInterval(updateStatus, 1000);
       updateStatus();
+      watchMedia(pc);
+      autoHide();
     }
     if (pc.connectionState === 'failed') { ctx.toast('انقطع الاتصال'); hangup('failed'); }
     if (pc.connectionState === 'disconnected') {
@@ -64,7 +72,7 @@ async function getMedia(video) {
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true },
-      video: video ? { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 1280 } } : false,
+      video: video ? { facingMode: 'user' } : false,
     });
   } catch (e) {
     // بعض الأجهزة ترفض الإعدادات الدقيقة، نجرب بالإعدادات البسيطة
@@ -124,6 +132,22 @@ async function onSignal(p) {
     clearTimeout(cur.timeout);
     await cur.pc.setRemoteDescription({ type: 'answer', sdp: p.sdp });
     render();
+  } else if (p.t === 'reoffer' && cur.pc) {
+    // الطرف الثاني شغّل الكاميرا: نحدّث الاتصال
+    const pc = cur.pc;
+    try {
+      if (pc.signalingState !== 'stable') {
+        if (ctx.me < cur.other) return;                  // تصادم: اللي رقمه أصغر يكمّل طلبه
+        await pc.setLocalDescription({ type: 'rollback' });
+      }
+      await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await waitIce(pc);
+      send(cur.other, { t: 'reanswer', id: cur.id, sdp: pc.localDescription.sdp });
+      if (p.video && !cur.remoteVideo) { cur.remoteVideo = true; ctx.toast((ctx.member(cur.other)?.name || '') + ' شغّل الكاميرا'); render(); }
+    } catch (e) { console.error('reoffer', e); }
+  } else if (p.t === 'reanswer' && cur.pc) {
+    try { if (cur.pc.signalingState === 'have-local-offer') await cur.pc.setRemoteDescription({ type: 'answer', sdp: p.sdp }); } catch (e) { console.error('reanswer', e); }
   } else if (p.t === 'end') {
     if (cur.outgoing) hangup(p.why === 'declined' ? 'declined' : 'ended', true);
     else cleanup();
@@ -180,7 +204,7 @@ function cleanup() {
   if (!cur) return;
   stopTone();
   if (navigator.vibrate) navigator.vibrate(0);
-  clearInterval(cur.resend); clearInterval(cur.timer); clearTimeout(cur.timeout);
+  clearInterval(cur.resend); clearInterval(cur.timer); clearTimeout(cur.timeout); clearTimeout(cur.hideT);
   cur.stream?.getTracks().forEach((t) => t.stop());
   try { cur.pc?.close(); } catch (e) { /* ignore */ }
   cur = null;
@@ -188,6 +212,7 @@ function cleanup() {
   const o = el();
   o.classList.add('hidden');
   o.innerHTML = '';
+  o.classList.remove('bare');
 }
 
 function attachLocal() {
@@ -195,8 +220,59 @@ function attachLocal() {
   if (v && cur.video) { v.srcObject = cur.stream; v.play().catch(() => {}); }
 }
 
+// ---------- تحويل المكالمة الصوتية لفيديو ----------
+async function toVideo() {
+  if (!cur || !cur.pc || !cur.stream) return;
+  let track;
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+    track = s.getVideoTracks()[0];
+  } catch (e) { return ctx.mediaError ? ctx.mediaError(e, 'cam') : ctx.toast('ما اشتغلت الكاميرا'); }
+  if (!cur) { track.stop(); return; }
+  cur.stream.addTrack(track);
+  cur.video = true;
+  cur.facing = 'user';
+  const pc = cur.pc;
+  pc.addTrack(track, cur.stream);
+  render();
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce(pc);
+    if (cur && cur.pc === pc) send(cur.other, { t: 'reoffer', id: cur.id, sdp: pc.localDescription.sdp, video: true });
+  } catch (e) { console.error('toVideo', e); ctx.toast('ما قدرنا نشغّل الفيديو'); }
+}
+
+// إذا الطرف الثاني طلع من التطبيق أو انقطع عنه النت، المكالمة ما تظل معلّقة للأبد
+function watchMedia(pc) {
+  let last = -1, still = 0;
+  const iv = setInterval(async () => {
+    if (!cur || cur.pc !== pc) return clearInterval(iv);
+    try {
+      let bytes = 0;
+      (await pc.getStats()).forEach((r) => { if (r.type === 'inbound-rtp') bytes += r.bytesReceived || 0; });
+      if (bytes === last) still += 5; else still = 0;
+      last = bytes;
+      if (still === 15) ctx.toast('الصوت مقطوع من الطرف الثاني…');
+      if (still >= 30) { clearInterval(iv); ctx.toast('انقطعت المكالمة'); hangup('failed'); }
+    } catch (e) { /* ignore */ }
+  }, 5000);
+}
+
+// في مكالمة الفيديو: اضغط على الشاشة تختفي الأزرار، واضغط ثاني ترجع
+function autoHide() {
+  if (!cur) return;
+  clearTimeout(cur.hideT);
+  const o = el();
+  const vid = o.classList.contains('video-on');
+  o.classList.remove('bare');
+  if (vid && cur.startedAt) cur.hideT = setTimeout(() => { if (cur && !cur.minimized) el().classList.add('bare'); }, 5000);
+}
+
 // ---------- الواجهة ----------
-const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+const fmt = (s) => {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+};
 function statusText() {
   if (!cur) return '';
   if (cur.startedAt) return fmt(Math.round((Date.now() - cur.startedAt) / 1000));
@@ -217,7 +293,8 @@ function restore() { if (!cur) return; cur.minimized = false; setPill(null); el(
 function render() {
   const o = el();
   const m = ctx.member(cur.other);
-  o.className = 'overlay call' + (cur.video ? ' video-on' : '') + (cur.state === 'ringing' ? ' ringing' : '');
+  const anyVideo = cur.video || cur.remoteVideo || !!cur.stream?.getVideoTracks().length;
+  o.className = 'overlay call' + (anyVideo ? ' video-on' : '') + (cur.state === 'ringing' ? ' ringing' : '');
   o.innerHTML = callMarkup(cur, ctx, statusText());
   o.querySelector('h2').textContent = m?.name || 'فرد من العائلة';
   if (!cur.minimized) o.classList.remove('hidden');
@@ -227,18 +304,29 @@ function render() {
     const r = cur.pc.getReceivers().map((x) => x.track).filter(Boolean);
     if (r.length) { const v = o.querySelector('video.remote'); v.srcObject = new MediaStream(r); v.play().catch(() => {}); }
   }
+  autoHide();
   o.onclick = async (e) => {
+    if (!cur) return;
     const b = e.target.closest('button');
-    if (!b || !cur) return;
+    if (!b) {
+      // ضغطة على الفيديو: نخفي أو نرجّع الأزرار
+      if (o.classList.contains('video-on') && cur.state !== 'ringing') {
+        if (o.classList.contains('bare')) autoHide(); else { clearTimeout(cur.hideT); o.classList.add('bare'); }
+      }
+      return;
+    }
+    autoHide();
     const a = b.dataset.a;
     if (a === 'accept') accept();
     else if (a === 'decline') decline();
     else if (a === 'hang') hangup('ended');
     else if (a === 'min') minimize();
     else if (a === 'chat') { minimize(); ctx.openChat?.(cur.chatId); }
+    else if (a === 'tovideo') toVideo();
     else if (a === 'more') {
       ctx.menu?.([
         { label: 'فتح الدردشة', run: () => { minimize(); ctx.openChat?.(cur.chatId); } },
+        ...(cur.stream?.getVideoTracks().length ? [] : [{ label: 'تحويل لمكالمة فيديو', run: toVideo }]),
         { label: 'تصغير المكالمة', run: minimize },
       ]);
     } else if (a === 'speaker') {

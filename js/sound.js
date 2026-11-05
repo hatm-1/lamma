@@ -112,6 +112,24 @@ function whoosh({ t = 0.2, vol = 0.09, at = 0, from = 700, to = 3200, q = 1.6 } 
   s.start(now);
   s.stop(now + t + 0.02);
 }
+// ضربة قصيرة بفلتر (ورق، حجر) — ضوضاء تمر من فلتر نطاق
+function snap({ f = 2500, q = 1.2, t = 0.05, vol = 0.2, at = 0 } = {}) {
+  const c = ctx();
+  if (!c) return;
+  const now = c.currentTime + at;
+  const len = Math.max(1, Math.floor(c.sampleRate * t));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (len * 0.18));
+  const s = c.createBufferSource();
+  s.buffer = buf;
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+  const g = c.createGain();
+  g.gain.value = vol;
+  s.connect(bp).connect(g).connect(master);
+  s.start(now);
+}
 // فقاعة: نغمة ترتفع بسرعة وتختفي
 function bubble(f, { vol = 0.12, at = 0, t = 0.11 } = {}) {
   tone({ f, f2: f * 1.9, t, vol, at, attack: 0.003 });
@@ -152,6 +170,19 @@ const SFX = {
   flip: () => { tone({ f: 600, f2: 900, t: 0.05, type: 'triangle', vol: 0.05 }); },
   win: () => { [523, 659, 784, 1046, 1318].forEach((f, i) => tone({ f, t: 0.22, type: 'triangle', vol: 0.12, at: i * 0.09 })); },
   lose: () => { [392, 349, 311].forEach((f, i) => tone({ f, t: 0.25, type: 'sine', vol: 0.1, at: i * 0.14 })); },
+  // ورقة تنحط على الطاولة: «طق» ورقي + ضربة خفيفة
+  card: () => { snap({ f: 3200, q: 0.9, t: 0.045, vol: 0.32 }); snap({ f: 900, q: 1.4, t: 0.06, vol: 0.18, at: 0.006 }); tone({ f: 180, f2: 90, t: 0.06, vol: 0.06 }); },
+  // توزيع: ورق ينزل ورا بعض بسرعة
+  deal: () => { for (let i = 0; i < 8; i++) snap({ f: 2600 + Math.random() * 900, q: 1, t: 0.035, vol: 0.14, at: i * 0.075 }); },
+  // سحب الأكلة
+  sweep: () => { whoosh({ t: 0.26, vol: 0.08, from: 2400, to: 700, q: 0.9 }); snap({ f: 2200, q: 0.8, t: 0.05, vol: 0.1, at: 0.2 }); },
+  // حجر دومينو: طقّة عظمية بصدى خفيف
+  clack: () => { snap({ f: 2300, q: 6, t: 0.07, vol: 0.5 }); snap({ f: 3900, q: 8, t: 0.04, vol: 0.25, at: 0.003 }); tone({ f: 1250, t: 0.05, type: 'triangle', vol: 0.05 }); },
+  // خلط أحجار الدومينو
+  shuffle: () => { for (let i = 0; i < 14; i++) snap({ f: 1800 + Math.random() * 2200, q: 5, t: 0.04, vol: 0.12 + Math.random() * 0.1, at: i * 0.045 + Math.random() * 0.02 }); },
+  draw: () => { whoosh({ t: 0.14, vol: 0.06, from: 900, to: 2600 }); snap({ f: 2300, q: 6, t: 0.05, vol: 0.2, at: 0.12 }); },
+  // جا دورك
+  turn: () => { pluck(880, { t: 0.18, vol: 0.07 }); pluck(1320, { t: 0.3, vol: 0.07, at: 0.1 }); },
   ding: () => { tone({ f: 1318, t: 0.5, type: 'sine', vol: 0.14 }); tone({ f: 1976, t: 0.4, type: 'sine', vol: 0.05, at: 0.01 }); },
 };
 const GROUP = { tap: 'taps', toggle: 'taps', key: 'taps', send: 'msgs', receive: 'msgs', notify: 'msgs' };
@@ -206,4 +237,22 @@ export function confetti() {
     if (el < 2600) requestAnimationFrame(step); else cv.remove();
   };
   requestAnimationFrame(step);
+}
+
+// اهتزاز خفيف: أندرويد عنده vibrate، والآيفون (iOS 18+) نستخدم مفتاح التبديل المخفي اللي يطلّع اهتزاز
+let hapticEl = null;
+export function haptic(kind = 'light') {
+  if (!soundPrefs().games) return;
+  try {
+    if (navigator.vibrate) { navigator.vibrate(kind === 'strong' ? [18, 40, 18] : 12); return; }
+    if (!/iP(hone|ad|od)/.test(navigator.userAgent)) return;
+    if (!hapticEl) {
+      hapticEl = document.createElement('label');
+      hapticEl.style.cssText = 'position:fixed;left:-99px;top:0;width:1px;height:1px;overflow:hidden;opacity:0';
+      hapticEl.innerHTML = '<input type="checkbox" switch>';
+      document.body.appendChild(hapticEl);
+    }
+    hapticEl.click();
+    if (kind === 'strong') setTimeout(() => hapticEl.click(), 90);
+  } catch (e) { /* ignore */ }
 }

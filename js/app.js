@@ -2,9 +2,10 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import { CONFIG } from './config.js';
 import { deriveFromPassphrase, importKey, encJSON, decJSON, encBytes, decBytes } from './crypto.js';
-import { initCalls, startCall } from './calls.js';
-import { sfx, unlockAudio, bindTapSounds, soundPrefs, setSoundPref, confetti, SOUND_STYLES } from './sound.js';
-import { initGames, loadGames, renderGamesPane, onGameChange, openGame, gameIsOpen, closeGame, GICON, GINFO, myTurns } from './games.js';
+import { initCalls, startCall, inCall } from './calls.js';
+import { setPill } from './callui.js';
+import { sfx, unlockAudio, bindTapSounds, soundPrefs, setSoundPref, confetti, SOUND_STYLES, haptic } from './sound.js';
+import { initGames, loadGames, renderGamesPane, onGameChange, openGame, gameIsOpen, closeGame, GICON, GINFO, myTurns, chatGamesSheet, chatGameFlag } from './games.js';
 
 // ================= أدوات =================
 const svg = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
@@ -129,7 +130,7 @@ const touch = matchMedia('(pointer: coarse)').matches;
 const KEYSLOT = 'lamma-key:' + CONFIG.SUPABASE_URL;
 
 // ================= سجل الأخطاء (تشوفه من الإعدادات وترسله) =================
-const APP_VER = '1.3.1';
+const APP_VER = '1.9.2';
 const LOGK = 'lamma-log';
 function logErr(kind, msg) {
   try {
@@ -455,6 +456,7 @@ async function start() {
     sb, me: () => S.me, members: () => S.members, chats: () => S.chats, chatOf, chatName, nameOf, short, avatar, chatAvatar, esc, toast,
     openSheet, closeSheet, sendTo, notify, hydrate, ICON, listTime, memberRows, openDirect,
     openChat: (id) => openChat(id), tab: () => S.tab, onBadge: () => badge(), sfx, confetti, ask,
+    isHere: (uid) => S.online.has(uid), mediaError, inCall, voicePill: setPill, haptic,
   });
   await Promise.all([loadMembers(), loadChats(), loadStories(), loadBlocks(), loadGames()]);
   show('main');
@@ -786,7 +788,9 @@ function bindMain() {
   bindChat();
   addEventListener('popstate', onBack);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { touchSeen(); S.unlocked.clear(); return; }
+    // «متصل» يعني فاتح التطبيق قدامه. إذا طلع، نشيله عشان توصله الإشعارات بدل ما نحسبه موجود
+    if (document.hidden) { touchSeen(); S.unlocked.clear(); try { S.pres?.untrack(); } catch (e) { /* ignore */ } return; }
+    try { S.pres?.track({ at: Date.now() }); } catch (e) { /* ignore */ }
     resync();
     markRead();
   });
@@ -1114,6 +1118,7 @@ function renderHeader() {
   $('#chatWho').innerHTML = `${chatAvatar(c, 'sm')}<div><b>${esc(chatName(c))}</b><small>${c.ttl ? `<i class="pv">${ICON.timer}</i>` : ''}${esc(sub)}</small></div>`;
   hydrate($('#chatWho'));
   $('#callGroup').classList.toggle('hidden', !c.is_direct);
+  $('#chatGamesDot')?.classList.toggle('hidden', !chatGameFlag(c.id));
 }
 
 function ticks(m) {
@@ -1312,6 +1317,7 @@ function bindChat() {
   $('#chatWho').onclick = () => (S.open.chat.is_direct ? openContactInfo(S.open.chat.other, S.open.id) : openGroupInfo(S.open.id));
   bindSwipeReply();
   $('#callBtn').onclick = () => startCall(S.open.chat.other, S.open.id, false);
+  $('#chatGamesBtn').onclick = () => chatGamesSheet(S.open.id, S.open.chat.is_direct ? S.open.chat.other : null);
   $('#vidBtn').onclick = () => startCall(S.open.chat.other, S.open.id, true);
   const inp = $('#msgInp');
   inp.oninput = () => { autosize(); syncSend(); sendTyping(); };
@@ -2402,6 +2408,8 @@ function storyGroups() {
     if (!by.has(s.user_id)) by.set(s.user_id, []);
     by.get(s.user_id).push(s);
   }
+  // القصص بترتيب نشرها: الأقدم أول، والجديدة تنضاف بعدها
+  for (const list of by.values()) list.sort((a, b) => ts(a.created_at) - ts(b.created_at));
   const groups = [...by.entries()].map(([uid, list]) => ({ uid, list, last: ts(list[list.length - 1].created_at), unseen: list.some((s) => !S.seen.has(s.id)) }));
   groups.sort((a, b) => b.last - a.last);
   return groups;
@@ -2434,6 +2442,23 @@ function renderStories() {
     const first = grp.uid === S.me ? 0 : Math.max(0, grp.list.findIndex((s) => !S.seen.has(s.id)));
     openViewer(order.filter((x) => x.uid !== S.me || grp.uid === S.me), order.filter((x) => x.uid !== S.me || grp.uid === S.me).indexOf(grp), first);
   };
+}
+
+function myStoriesSheet(grp) {
+  const rows = grp.list.map((st, i) => {
+    const n = S.views.get(st.id)?.length || 0;
+    const thumb = st.b.m
+      ? `<span class="st-thumb"><img data-media="${esc(st.b.m.p)}" data-type="image/jpeg" alt=""></span>`
+      : `<span class="st-thumb txt" style="background:${esc(st.b.bg || STORY_BG[0])}">${esc((st.b.t || '').slice(0, 14))}</span>`;
+    return `<button class="row st-row" data-i="${i}">${thumb}<div class="row-main"><div class="row-text"><b>${esc(listTime(st.created_at))}</b><span>${ICON.eye} ${n} مشاهدة</span></div></div></button>`;
+  }).join('');
+  openSheet(`<h3>قصصي (${grp.list.length})</h3>${rows}<div class="form" style="margin-top:8px"><button class="btn" data-i="0">شاهد الكل من البداية</button></div>`, (e) => {
+    const b = e.target.closest('[data-i]');
+    if (!b) return;
+    closeSheet();
+    setTimeout(() => openViewer([grp], 0, Number(b.dataset.i)), 220);
+  });
+  hydrate($('#sheet'));
 }
 
 function addStorySheet() {
@@ -2531,7 +2556,9 @@ async function showStory() {
     <div class="sv-bars">${g.list.map((_, i) => `<i class="${i < SV.si ? 'done' : ''}"><b></b></i>`).join('')}</div>
     <div class="sv-head">${avatar(g.uid, 'sm')}<div><b>${esc(nameOf(g.uid))}</b><small>${listTime(s.created_at)}</small></div>
       ${mine ? `<button class="glass-btn dark" data-a="del" aria-label="حذف">${ICON.trash}</button>` : ''}<button class="glass-btn dark" data-a="x" aria-label="إغلاق">${ICON.close}</button></div>
-    <div class="sv-body" id="svBody">${s.b.m ? `<img data-media="${esc(s.b.m.p)}" data-type="image/jpeg" alt="">` : esc(s.b.t)}</div>
+    ${s.b.m
+      ? `<div class="sv-body photo" id="svBody"><img class="bgblur" data-media="${esc(s.b.m.p)}" data-type="image/jpeg" alt=""><img class="main" data-media="${esc(s.b.m.p)}" data-type="image/jpeg" alt=""></div><div class="sv-tap"></div>`
+      : `<div class="sv-body" id="svBody">${esc(s.b.t)}</div>`}
     ${s.b.m && s.b.t ? `<div class="sv-cap">${esc(s.b.t)}</div>` : ''}
     ${mine
       ? `<div class="sv-foot" style="justify-content:center"><button class="viewers" data-a="views">${ICON.eye}<span>${nViews} مشاهدة</span></button></div>`
@@ -2558,7 +2585,10 @@ async function showStory() {
     SV.raf = requestAnimationFrame(tick);
   };
   SV.elapsed = 0;
-  const img = v.querySelector('#svBody img');
+  // نجهز صورة القصة اللي بعدها عشان ما تطلع فاضية
+  const nx = g.list[SV.si + 1] || SV.groups[SV.gi + 1]?.list[0];
+  if (nx?.b?.m) loadMedia(nx.b.m.p, 'image/jpeg').catch(() => {});
+  const img = v.querySelector('#svBody img.main') || v.querySelector('#svBody img');
   if (img && !img.complete) {
     SV.paused = true;
     img.addEventListener('load', () => { if (SV) SV.paused = false; }, { once: true });
@@ -2576,8 +2606,10 @@ async function showStory() {
     onStart: () => { SV.paused = true; },
     onEnd: () => { if (SV && document.activeElement !== inp) SV.paused = false; },
     onTap: (e) => {
-      if (!SV || !e.target.closest('.sv-body,.sv-cap,.sv-bars,.sv-tap')) return;
-      storyStep(e.clientX > (innerWidth * 2) / 3 ? -1 : 1);
+      if (!SV || !e.target.closest('.sv-body,.sv-cap,.sv-bars,.sv-tap,.sv-head')) return;
+      if (e.target.closest('button')) return;
+      // الضغط على يسار الشاشة يرجع للقصة اللي قبل، وأي مكان ثاني يروح للي بعدها
+      storyStep(e.clientX < innerWidth / 3 ? -1 : 1);
     },
   });
   v.onclick = async (e) => {
